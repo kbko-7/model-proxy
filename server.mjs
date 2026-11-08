@@ -11,10 +11,11 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { buildBackendRequest, buildFrontendResponse, streamToFrontend } from './translate.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, 'config.yaml');
-const STATE_PATH = join(__dirname, 'state.json');
+const CONFIG_PATH = process.env.CANNBOT_PROXY_CONFIG || join(__dirname, 'config.yaml');
+const STATE_PATH = process.env.CANNBOT_PROXY_STATE || join(__dirname, 'state.json');
 const PANEL_PATH = join(__dirname, 'panel.html');
 const ANTHROPIC_VERSION = '2023-06-01';
 // 发现接口别名前缀：Claude Code 只保留 id 里含 "claude"/"anthropic" 的模型，
@@ -127,36 +128,95 @@ function tokenExpiry() {
 }
 
 // ---------- 转发 ----------
-function forwardToProvider(target, bodyStr, clientReq, clientRes) {
-  const u = new URL(target.provider.baseURL);
-  const headers = {
-    'content-type': clientReq.headers['content-type'] || 'application/json',
-    'authorization': target.provider.headers?.Authorization || '',
-    'x-api-vkey': target.provider.headers?.['x-api-vkey'] || '',
-    'anthropic-version': clientReq.headers['anthropic-version'] || ANTHROPIC_VERSION,
-  };
-  if (clientReq.headers['anthropic-beta']) headers['anthropic-beta'] = clientReq.headers['anthropic-beta'];
+function providerProtocol(provider) {
+  return (provider.protocol || 'anthropic').toLowerCase();
+}
 
+function safeJson(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+function readResponseBody(res) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    res.on('data', (c) => chunks.push(c));
+    res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    res.on('error', reject);
+  });
+}
+
+// 泛化转发：backendBody 已是「后端协议」格式。同协议直通，跨协议翻译响应/流。
+function forward(target, frontendProtocol, backendBody, clientReq, clientRes) {
+  const backendProtocol = providerProtocol(target.provider);
+  const base = (target.provider.baseURL || '').replace(/\/+$/, '');
+  const upstreamPath = backendProtocol === 'openai'
+    ? base + '/chat/completions'
+    : base + '/v1/messages';
+  const u = new URL(upstreamPath);
+  const headers = {
+    'content-type': 'application/json',
+    ...(target.provider.headers || {}),
+  };
+  if (backendProtocol === 'anthropic') {
+    headers['anthropic-version'] = clientReq.headers['anthropic-version'] || ANTHROPIC_VERSION;
+    if (clientReq.headers['anthropic-beta']) headers['anthropic-beta'] = clientReq.headers['anthropic-beta'];
+  }
+  const isStream = backendBody.stream === true;
   const started = Date.now();
-  const upstream = https.request({
+  const model = `${target.providerId}/${target.modelId}`;
+  const transport = u.protocol === 'http:' ? http : https;
+
+  const upstream = transport.request({
     hostname: u.hostname,
-    port: u.port || 443,
-    path: u.pathname.replace(/\/$/, '') + '/v1/messages',
+    port: u.port || (u.protocol === 'http:' ? 80 : 443),
+    path: u.pathname + u.search,
     method: 'POST',
     headers,
-  }, (upRes) => {
-    clientRes.writeHead(upRes.statusCode || 502, upRes.headers);
-    upRes.pipe(clientRes);
-    upRes.on('end', () => {
-      addLog({ ts: Date.now(), model: `${target.providerId}/${target.modelId}`, status: upRes.statusCode, ms: Date.now() - started });
-    });
+  }, async (upRes) => {
+    const status = upRes.statusCode || 502;
+    // 后端报错：原样透传（错误格式各异，客户端自行读取 message）
+    if (status >= 400) {
+      clientRes.writeHead(status, upRes.headers);
+      upRes.pipe(clientRes);
+      upRes.on('end', () => addLog({ ts: Date.now(), model, status, ms: Date.now() - started }));
+      return;
+    }
+    try {
+      // 同协议：完全直通，保持与旧版一致的行为
+      if (frontendProtocol === backendProtocol) {
+        clientRes.writeHead(status, upRes.headers);
+        upRes.pipe(clientRes);
+        upRes.on('end', () => addLog({ ts: Date.now(), model, status, ms: Date.now() - started }));
+        return;
+      }
+      if (isStream) {
+        clientRes.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
+        await streamToFrontend(frontendProtocol, backendProtocol, upRes, clientRes, target.modelId);
+        addLog({ ts: Date.now(), model, status, ms: Date.now() - started });
+        clientRes.end();
+      } else {
+        const bodyStr = await readResponseBody(upRes);
+        const parsed = safeJson(bodyStr);
+        let out = parsed;
+        if (parsed && typeof parsed === 'object') {
+          try { out = buildFrontendResponse(frontendProtocol, backendProtocol, parsed); } catch { out = parsed; }
+        }
+        clientRes.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        clientRes.end(typeof out === 'string' ? out : JSON.stringify(out));
+        addLog({ ts: Date.now(), model, status, ms: Date.now() - started });
+      }
+    } catch (e) {
+      addLog({ ts: Date.now(), model, status: 'ERR', ms: Date.now() - started, err: e.message });
+      if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
+      clientRes.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: e.message } }));
+    }
   });
   upstream.on('error', (e) => {
-    addLog({ ts: Date.now(), model: `${target.providerId}/${target.modelId}`, status: 'ERR', ms: Date.now() - started, err: e.message });
+    addLog({ ts: Date.now(), model, status: 'ERR', ms: Date.now() - started, err: e.message });
     if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
     clientRes.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: e.message } }));
   });
-  upstream.write(bodyStr);
+  upstream.write(JSON.stringify(backendBody));
   upstream.end();
 }
 
@@ -194,6 +254,24 @@ function json(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
+// 各前端协议共用的补全入口：鉴权 → 选模型 → 翻译成后端协议 → 转发
+async function handleCompletion(frontendProtocol, req, res) {
+  if (!authOk(req)) return json(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'invalid api key' } });
+  let bodyStr;
+  try { bodyStr = await readBody(req); } catch (e) { return json(res, 413, { type: 'error', error: { type: 'invalid_request_error', message: e.message } }); }
+  let body;
+  try { body = JSON.parse(bodyStr); } catch { return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid json body' } }); }
+  let target;
+  try { target = pickTarget(body.model); } catch (e) { return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: e.message } }); }
+  let backendBody;
+  try {
+    backendBody = buildBackendRequest(frontendProtocol, providerProtocol(target.provider), body, target.modelId);
+  } catch (e) {
+    return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: e.message } });
+  }
+  return forward(target, frontendProtocol, backendBody, req, res);
+}
+
 // ---------- HTTP 路由 ----------
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
@@ -207,24 +285,34 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path === '/v1/models' && req.method === 'GET') {
+      // Claude Code 会带 anthropic-version 头；OpenAI/Codex 不带，据此区分返回形状
+      if (req.headers['anthropic-version']) {
+        const data = providerModels().map((m) => ({
+          id: aliasFor(m.fullId),
+          display_name: m.name,
+          description: `${m.providerName} · ${m.contextWindow ? (m.contextWindow / 1024) + 'K' : '—'}`,
+        }));
+        return json(res, 200, { data, has_more: false });
+      }
       const data = providerModels().map((m) => ({
-        id: aliasFor(m.fullId),
-        display_name: m.name,
-        description: `${m.providerName} · ${m.contextWindow ? (m.contextWindow / 1024) + 'K' : '—'}`,
+        id: m.fullId,
+        object: 'model',
+        created: Math.floor(Date.now() / 1000),
+        owned_by: m.providerName,
       }));
-      return json(res, 200, { data, has_more: false });
+      return json(res, 200, { object: 'list', data });
     }
 
     if (path === '/v1/messages' && req.method === 'POST') {
-      if (!authOk(req)) return json(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'invalid api key' } });
-      let bodyStr;
-      try { bodyStr = await readBody(req); } catch (e) { return json(res, 413, { type: 'error', error: { type: 'invalid_request_error', message: e.message } }); }
-      let body;
-      try { body = JSON.parse(bodyStr); } catch { return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid json body' } }); }
-      let target;
-      try { target = pickTarget(body.model); } catch (e) { return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: e.message } }); }
-      body.model = target.modelId; // 改写成上游真实模型 id
-      return forwardToProvider(target, JSON.stringify(body), req, res);
+      return handleCompletion('anthropic', req, res);
+    }
+
+    if (path === '/v1/chat/completions' && req.method === 'POST') {
+      return handleCompletion('openai', req, res);
+    }
+
+    if (path === '/v1/responses' && req.method === 'POST') {
+      return handleCompletion('openai-responses', req, res);
     }
 
     if (path === '/v1/messages/count_tokens' && req.method === 'POST') {
@@ -255,8 +343,10 @@ const server = http.createServer(async (req, res) => {
         for (const [pid, p] of allProviders()) {
           providers[pid] = {
             displayName: p.displayName || pid,
-            authorization: (p.headers?.Authorization || '').replace(/^Bearer\s+/i, ''),
-            vkey: p.headers?.['x-api-vkey'] || '',
+            protocol: providerProtocol(p),
+            baseURL: p.baseURL || '',
+            headers: p.headers || {},
+            models: (p.models || []).map((m) => m.id),
           };
         }
         return json(res, 200, {
@@ -282,12 +372,19 @@ const server = http.createServer(async (req, res) => {
         for (const [pid, val] of Object.entries(b.providers || {})) {
           const p = config.providers?.[pid];
           if (!p) continue;
-          p.headers = p.headers || {};
-          const auth = String(val.authorization || '').trim();
-          // 留空 = 保持原值不动（防止误清空）；要清除请手改 config.yaml
-          if (auth) p.headers.Authorization = /^Bearer\s/i.test(auth) ? auth : 'Bearer ' + auth;
-          const vk = String(val.vkey || '').trim();
-          if (vk) p.headers['x-api-vkey'] = vk;
+          if (typeof val.displayName === 'string' && val.displayName.trim()) p.displayName = val.displayName.trim();
+          const proto = String(val.protocol || '').toLowerCase();
+          if (proto === 'anthropic' || proto === 'openai') p.protocol = proto;
+          if (typeof val.baseURL === 'string' && val.baseURL.trim()) p.baseURL = val.baseURL.trim();
+          // headers 整体替换（过滤空键）；未传 headers 则不动（防止旧客户端误清空）
+          if (val.headers && typeof val.headers === 'object') {
+            const headers = {};
+            for (const [k, v] of Object.entries(val.headers)) {
+              const key = String(k).trim();
+              if (key) headers[key] = String(v ?? '');
+            }
+            p.headers = headers;
+          }
         }
         try {
           writeFileSync(CONFIG_PATH, CONFIG_HEADER + stringifyYaml(config), 'utf8');

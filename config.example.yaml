@@ -1,7 +1,15 @@
 # CANNBot 模型切换代理 · 配置文件（示例）
 # 复制本文件为 config.yaml，并填入你自己的鉴权信息。
-# 监听地址 / api-key / 各 provider 鉴权都可以在控制台「设置」里改。
 # 注意：config.yaml 含明文密钥，已被 .gitignore 排除，请勿提交真实文件。
+#
+# 每个 provider 用 protocol 声明它说的是哪种后端协议：
+#   anthropic  -> 转发到  baseURL + /v1/messages
+#   openai     -> 转发到  baseURL + /chat/completions
+# 前端协议（本机端口同时暴露）：
+#   Claude Code 走 /v1/messages（anthropic）
+#   Codex 走 /v1/responses（openai responses）
+#   通用 OpenAI 工具走 /v1/chat/completions（openai）
+# 前后端协议不同时，代理自动做翻译（含流式）。
 
 server:
   host: 127.0.0.1
@@ -9,8 +17,10 @@ server:
   apiKey: ""
   selectedModel: cannbot/deepseek-v4-pro
 providers:
+  # ---- Anthropic 兼容后端（示例：CANNBot）----
   cannbot:
     displayName: CANNBot
+    protocol: anthropic
     baseURL: https://cannbot.hicann.cn/anthropic
     headers:
       Authorization: Bearer <你的 JWT，每 24 小时过期>
@@ -39,6 +49,7 @@ providers:
         contextWindow: 1048576
   cannbot-builtin:
     displayName: CANNBot 内置
+    protocol: anthropic
     baseURL: https://cannbot.hicann.cn/anthropic
     headers:
       Authorization: Bearer <你的 JWT，每 24 小时过期>
@@ -53,3 +64,17 @@ providers:
       - id: deepseek-v4-flash
         name: DeepSeek-V4-Flash(built-in)
         contextWindow: 1048576
+
+  # ---- OpenAI 兼容后端（示例：官方 / DeepSeek / vLLM / Ollama 等）----
+  # 取消注释并按需填 key。baseURL 要写成「再拼 /chat/completions 就完整」的地址，
+  # 例如 https://api.openai.com/v1、https://api.deepseek.com/v1、http://localhost:8000/v1
+  # openai:
+  #   displayName: OpenAI
+  #   protocol: openai
+  #   baseURL: https://api.openai.com/v1
+  #   headers:
+  #     Authorization: Bearer <你的 OpenAI key>
+  #   models:
+  #     - id: gpt-4o
+  #       name: GPT-4o
+  #       contextWindow: 128000

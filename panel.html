@@ -91,6 +91,24 @@
   .row { display: flex; gap: 8px; }
   .row input:first-child { flex: 1; }
   .prov-title { font-size: 13px; color: var(--muted); font-weight: 600; margin: 14px 2px 8px; }
+  .fld select { width: 100%; background: var(--card-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none; }
+  .fld select:focus { border-color: var(--accent); }
+  .prov { background: var(--card-2); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+  .prov .prov-title { margin: 0 0 10px; }
+  .prov-id { font-family: ui-monospace, Consolas, monospace; color: var(--accent); }
+  .hdrs-wrap { margin-bottom: 10px; }
+  .hdrs-wrap > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .hdr-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+  .hdr-row input { background: var(--card-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none; min-width: 0; }
+  .hdr-row input:focus { border-color: var(--accent); }
+  .hdr-row .hdr-k { flex: 1; }
+  .hdr-row .hdr-v { flex: 1.6; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .hdr-del { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 8px; width: 30px; height: 34px; cursor: pointer; flex: none; }
+  .hdr-del:hover { color: var(--red); border-color: var(--red); }
+  .hdr-add { border: 1px dashed var(--border); background: transparent; color: var(--muted); border-radius: 8px; padding: 5px 12px; cursor: pointer; font-size: 12.5px; }
+  .hdr-add:hover { color: var(--accent); border-color: var(--accent); }
+  .prov-models { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; }
+  .prov-models .hint { opacity: .7; }
   .primary {
     width: 100%; margin-top: 4px; padding: 10px; border: 0; border-radius: 12px;
     background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
@@ -231,6 +249,18 @@ async function refreshLogs() {
 }
 
 // ---------- 设置 ----------
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function makeHeaderRow(k, v) {
+  const row = document.createElement('div'); row.className = 'hdr-row';
+  const ki = document.createElement('input'); ki.className = 'hdr-k'; ki.placeholder = 'Header 名（如 Authorization）'; ki.value = k || '';
+  const vi = document.createElement('input'); vi.className = 'hdr-v'; vi.placeholder = '值'; vi.value = v || '';
+  const del = document.createElement('button'); del.className = 'hdr-del'; del.type = 'button'; del.textContent = '×'; del.title = '删除';
+  row.append(ki, vi, del);
+  return row;
+}
+
 async function loadSettings() {
   const r = await api('/api/settings'); if (!r.ok) return;
   SETTINGS = await r.json();
@@ -239,19 +269,48 @@ async function loadSettings() {
   $('#set-key').value = SETTINGS.server.apiKey || '';
   const box = $('#set-providers'); box.innerHTML = '';
   for (const [pid, p] of Object.entries(SETTINGS.providers)) {
-    const t = document.createElement('div'); t.className = 'prov-title';
-    t.textContent = p.displayName + ' · 鉴权（JWT 每 24 小时过期）';
-    box.appendChild(t);
-    const jwt = document.createElement('div'); jwt.className = 'fld';
-    jwt.innerHTML = `<label>Authorization（JWT，Bearer 前缀可省略；留空 = 保持不变）</label><textarea id="set-jwt-${pid}" rows="3"></textarea>`;
-    box.appendChild(jwt);
-    const vk = document.createElement('div'); vk.className = 'fld';
-    vk.innerHTML = `<label>x-api-vkey（虚拟密钥；留空 = 保持不变）</label><input id="set-vk-${pid}">`;
-    box.appendChild(vk);
-    jwt.querySelector('textarea').value = p.authorization;
-    vk.querySelector('input').value = p.vkey;
+    const card = document.createElement('div'); card.className = 'prov'; card.dataset.pid = pid;
+    const models = (p.models || []).map(escapeHtml).join('、') || '（无）';
+    card.innerHTML = `
+      <div class="prov-title"><span class="prov-id">${escapeHtml(pid)}</span> · ${escapeHtml(p.protocol)}</div>
+      <div class="fld"><label>显示名</label><input class="prov-name" value="${escapeHtml(p.displayName)}"></div>
+      <div class="row">
+        <div class="fld" style="flex:1"><label>协议</label>
+          <select class="prov-protocol">
+            <option value="anthropic"${p.protocol === 'anthropic' ? ' selected' : ''}>anthropic</option>
+            <option value="openai"${p.protocol === 'openai' ? ' selected' : ''}>openai</option>
+          </select>
+        </div>
+        <div class="fld" style="flex:2"><label>baseURL</label><input class="prov-baseurl" value="${escapeHtml(p.baseURL)}"></div>
+      </div>
+      <div class="hdrs-wrap">
+        <label>鉴权头（headers）</label>
+        <div class="hdrs"></div>
+        <button class="hdr-add" type="button">+ 加 header</button>
+      </div>
+      <div class="prov-models">模型：${models} <span class="hint">（改模型列表请手改 config.yaml）</span></div>
+    `;
+    const hdrs = card.querySelector('.hdrs');
+    const entries = Object.entries(p.headers || {});
+    if (entries.length) for (const [k, v] of entries) hdrs.appendChild(makeHeaderRow(k, v));
+    else hdrs.appendChild(makeHeaderRow('', ''));
+    box.appendChild(card);
   }
 }
+
+// 事件委托：增删 header 行
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.hdr-add')) {
+    const wrap = e.target.closest('.hdrs-wrap');
+    wrap.querySelector('.hdrs').appendChild(makeHeaderRow('', ''));
+  } else if (e.target.closest('.hdr-del')) {
+    const row = e.target.closest('.hdr-row');
+    const hdrs = row.parentElement;
+    if (hdrs.querySelectorAll('.hdr-row').length > 1) row.remove();
+    else { row.querySelector('.hdr-k').value = ''; row.querySelector('.hdr-v').value = ''; }
+  }
+});
+
 $('#settings-btn').onclick = () => {
   const c = $('#settings-card'); const show = c.style.display === 'none';
   c.style.display = show ? '' : 'none';
@@ -268,10 +327,19 @@ $('#save-btn').onclick = async () => {
     },
     providers: {},
   };
-  for (const pid of Object.keys(SETTINGS.providers)) {
+  for (const card of document.querySelectorAll('#set-providers .prov')) {
+    const pid = card.dataset.pid;
+    const headers = {};
+    card.querySelectorAll('.hdr-row').forEach((row) => {
+      const k = row.querySelector('.hdr-k').value.trim();
+      const v = row.querySelector('.hdr-v').value;
+      if (k) headers[k] = v;
+    });
     body.providers[pid] = {
-      authorization: document.getElementById('set-jwt-' + pid).value.trim(),
-      vkey: document.getElementById('set-vk-' + pid).value.trim(),
+      displayName: card.querySelector('.prov-name').value.trim(),
+      protocol: card.querySelector('.prov-protocol').value,
+      baseURL: card.querySelector('.prov-baseurl').value.trim(),
+      headers,
     };
   }
   msg.textContent = '保存中…';
