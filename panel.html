@@ -45,11 +45,13 @@
     font-size: 12.5px; padding: 5px 11px; border-radius: 999px;
     background: var(--card); border: 1px solid var(--border); color: var(--muted);
   }
+  .pill.on { color: var(--green); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(63,185,80,.15); }
   .dot.warn { background: var(--yellow); box-shadow: 0 0 0 3px rgba(210,153,34,.15); }
   .dot.off { background: var(--red); box-shadow: 0 0 0 3px rgba(248,81,73,.15); }
   .icon-btn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 10px; padding: 6px 10px; cursor: pointer; font-size: 13px; }
   .icon-btn:hover { border-color: var(--accent); }
+  .icon-btn:disabled { opacity: .55; cursor: wait; }
 
   .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
   .card h2 { font-size: 13px; margin: 0 0 12px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
@@ -57,7 +59,7 @@
   .kv { display: flex; justify-content: space-between; font-size: 13.5px; padding: 7px 0; border-bottom: 1px dashed var(--border); }
   .kv:last-child { border-bottom: 0; }
   .kv .k { color: var(--muted); }
-  .kv .v { font-variant-numeric: tabular-nums; }
+  .kv .v { font-variant-numeric: tabular-nums; text-align: right; }
 
   .group-title { font-size: 13px; color: var(--muted); margin: 16px 2px 8px; font-weight: 600; }
   .model {
@@ -72,12 +74,18 @@
   .model .sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
   .model .check { margin-left: auto; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border); flex: none; }
   .model.selected .check { border-color: var(--accent); background: radial-gradient(circle at center, var(--accent) 0 6px, transparent 7px); }
+  .lat { margin-left: 8px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .lat.ok { color: var(--green); background: rgba(63,185,80,.12); }
+  .lat.mid { color: var(--yellow); background: rgba(210,153,34,.12); }
+  .lat.bad { color: var(--red); background: rgba(248,81,73,.12); }
+  .lat.err { color: var(--red); background: rgba(248,81,73,.12); }
 
-  #logs { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; max-height: 220px; overflow: auto; }
+  #logs { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; max-height: 260px; overflow: auto; }
   .log-row { display: flex; gap: 10px; padding: 5px 2px; border-bottom: 1px dashed var(--border); color: var(--muted); }
   .log-row .st { width: 40px; flex: none; }
   .log-row .st.ok { color: var(--green); }
   .log-row .st.err { color: var(--red); }
+  .log-row .cls { color: var(--accent); }
 
   .fld { margin-bottom: 12px; }
   .fld label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
@@ -88,6 +96,7 @@
   }
   .fld textarea { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; resize: vertical; word-break: break-all; }
   .fld input:focus, .fld textarea:focus { border-color: var(--accent); }
+  .fld input[type="checkbox"] { width: auto; margin-right: 6px; }
   .row { display: flex; gap: 8px; }
   .row input:first-child { flex: 1; }
   .prov-title { font-size: 13px; color: var(--muted); font-weight: 600; margin: 14px 2px 8px; }
@@ -109,6 +118,10 @@
   .hdr-add:hover { color: var(--accent); border-color: var(--accent); }
   .prov-models { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; }
   .prov-models .hint { opacity: .7; }
+  .disc-box { margin-top: 8px; }
+  .disc-item { display: block; font-size: 13px; margin: 5px 0; color: var(--text); }
+  .disc-item input { width: auto; margin-right: 7px; }
+  .disc-box .primary { margin-top: 8px; }
   .primary {
     width: 100%; margin-top: 4px; padding: 10px; border: 0; border-radius: 12px;
     background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
@@ -138,6 +151,7 @@
 
   <nav class="tabs">
     <button class="tab active" data-tab="models">模型</button>
+    <button class="tab" data-tab="usage">用量</button>
     <button class="tab" data-tab="logs">日志</button>
     <button class="tab" data-tab="settings">设置</button>
   </nav>
@@ -149,10 +163,29 @@
       <div class="kv"><span class="k">对外 api-key</span><span class="v" id="apikey">—</span></div>
       <div class="kv"><span class="k">Token 剩余</span><span class="v" id="token">—</span></div>
       <div class="kv"><span class="k">当前默认模型</span><span class="v" id="selected-name">—</span></div>
+      <div class="kv"><span class="k">智能路由</span><span class="v" id="routing-state">—</span></div>
     </div>
     <div class="card">
-      <h2>模型</h2>
+      <div class="card-head">
+        <h2>模型</h2>
+        <button class="icon-btn" id="ping-btn" title="对每个模型发一个最小请求，并行测延迟">⚡ 测速</button>
+      </div>
       <div id="models"></div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-usage">
+    <div class="card">
+      <div class="card-head">
+        <h2>用量（近 7 天）</h2>
+        <button class="icon-btn" id="usage-refresh" title="刷新">↻</button>
+      </div>
+      <div class="group-title" style="margin-top:0">按模型</div>
+      <div id="usage-models"><div class="foot">暂无数据</div></div>
+      <div class="group-title">按请求类型</div>
+      <div id="usage-classes"><div class="foot">暂无数据</div></div>
+      <div class="group-title">按天</div>
+      <div id="usage-days"><div class="foot">暂无数据</div></div>
     </div>
   </section>
 
@@ -164,6 +197,16 @@
   </section>
 
   <section class="tab-panel" id="tab-settings">
+    <div class="card">
+      <div class="card-head">
+        <h2>智能路由</h2>
+        <span class="pill" id="route-hint">提示头：未检测到</span>
+      </div>
+      <div class="fld"><label><input type="checkbox" id="route-enabled"> 启用：子代理 / 后台任务自动分流到便宜模型</label></div>
+      <div class="fld"><label>子代理模型（subagent / workflow）</label><select id="route-subagent"></select></div>
+      <div class="fld"><label>后台任务模型（auxiliary / compaction）</label><select id="route-auxiliary"></select></div>
+      <div class="foot">主对话始终用面板默认模型；显式 /model 选择优先于路由。<br>需要 Claude Code 开启 CLAUDE_CODE_GATEWAY_HINT_HEADERS=1</div>
+    </div>
     <div class="card">
       <div class="card-head">
         <h2>设置（保存后写入 config.yaml）</h2>
@@ -181,7 +224,7 @@
     </div>
   </section>
 
-  <div class="foot">模型即点即生效 · token 在「设置」里换</div>
+  <div class="foot">模型即点即生效 · token 在「设置」里换 · 子代理分流在「智能路由」</div>
 </div>
 
 <script>
@@ -202,6 +245,17 @@ async function api(path, opts = {}) {
   }
   return r;
 }
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fmtTok(n) {
+  n = Number(n) || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+const CLS_NAMES = { main: '主对话', subagent: '子代理', workflow: '工作流', compaction: '压缩', auxiliary: '后台任务', unknown: '未分类' };
 
 async function refreshState() {
   try {
@@ -224,15 +278,29 @@ function fmtRemain(ms) {
   if (h > 0) return h + ' 小时 ' + m + ' 分';
   return m + ' 分钟';
 }
+function latBadge(rec) {
+  if (!rec) return '';
+  if (rec.status !== 200) return `<span class="lat err">探测失败</span>`;
+  const cls = rec.ms < 3000 ? 'ok' : (rec.ms < 8000 ? 'mid' : 'bad');
+  return `<span class="lat ${cls}">${rec.ms}ms</span>`;
+}
 function render() {
   const s = STATE;
   $('#addr').textContent = `${s.server.host}:${s.server.port}`;
   $('#apikey').textContent = s.server.apiKeyConfigured ? '已设置' : '未设置（仅本机）';
   const t = s.token;
-  $('#token').textContent = t ? fmtRemain(t.remainingMs) : '—';
+  $('#token').textContent = t ? (t.displayName ? t.displayName + ': ' : '') + fmtRemain(t.remainingMs) : '—';
   if (t) { $('#status-dot').className = 'dot ' + (t.remainingMs < 3600000 ? 'warn' : ''); }
   const selName = (s.models.find(m => m.fullId === s.selected) || {}).name || s.selected;
   $('#selected-name').textContent = selName;
+
+  const r = s.routing || {};
+  $('#routing-state').textContent = r.enabled
+    ? `已启用（子代理 → ${(s.models.find(m => m.fullId === r.subagentModel) || {}).name || r.subagentModel || '默认'}）`
+    : '关闭';
+  const hint = $('#route-hint');
+  hint.textContent = r.hintHeadersSeen ? '提示头：已检测到 ✓' : '提示头：未检测到';
+  hint.className = 'pill' + (r.hintHeadersSeen ? ' on' : '');
 
   const byProvider = {};
   for (const m of s.models) (byProvider[m.providerId] = byProvider[m.providerId] || []).push(m);
@@ -240,12 +308,12 @@ function render() {
   for (const [pid, list] of Object.entries(byProvider)) {
     const pname = (s.providers.find(p => p.id === pid) || {}).displayName || pid;
     const g = document.createElement('div');
-    g.innerHTML = `<div class="group-title">${pname}</div>`;
+    g.innerHTML = `<div class="group-title">${escapeHtml(pname)}</div>`;
     el.appendChild(g);
     for (const m of list) {
       const d = document.createElement('div');
       d.className = 'model' + (m.fullId === s.selected ? ' selected' : '');
-      d.innerHTML = `<div><div class="name">${m.name}</div><div class="sub">${m.modelId} · ${m.contextWindow ? (m.contextWindow/1024)+'K 上下文' : '—'}</div></div><div class="check"></div>`;
+      d.innerHTML = `<div><div class="name">${escapeHtml(m.name)}</div><div class="sub">${escapeHtml(m.modelId)} · ${m.contextWindow ? (m.contextWindow/1024)+'K 上下文' : '—'}${latBadge((s.latencies || {})[m.fullId])}</div></div><div class="check"></div>`;
       d.onclick = () => select(m.fullId);
       el.appendChild(d);
     }
@@ -255,6 +323,48 @@ async function select(fullId) {
   await api('/api/select', { method: 'POST', body: JSON.stringify({ model: fullId }) });
   await refreshState();
 }
+
+// ---------- 测速 ----------
+$('#ping-btn').onclick = async () => {
+  const btn = $('#ping-btn');
+  btn.disabled = true; btn.textContent = '⚡ 测速中…';
+  try {
+    await api('/api/ping', { method: 'POST', body: '{}' });
+    await refreshState();
+  } finally {
+    btn.disabled = false; btn.textContent = '⚡ 测速';
+  }
+};
+
+// ---------- 用量 ----------
+async function refreshUsage() {
+  try {
+    const r = await api('/api/usage?days=7');
+    const j = await r.json();
+    const mk = (box, entries, nameOf) => {
+      const el = $(box); el.innerHTML = '';
+      if (!entries.length) { el.innerHTML = '<div class="foot">暂无数据</div>'; return; }
+      for (const [id, v] of entries) {
+        const d = document.createElement('div'); d.className = 'kv';
+        d.innerHTML = `<span class="k">${escapeHtml(nameOf(id))}</span><span class="v">${v.req} 次 · 入 ${fmtTok(v.in)} / 出 ${fmtTok(v.out)}</span>`;
+        el.appendChild(d);
+      }
+    };
+    const models = Object.entries(j.totals.models || {}).sort((a, b) => (b[1].in + b[1].out) - (a[1].in + a[1].out));
+    mk('#usage-models', models, (id) => id);
+    const classes = Object.entries(j.totals.classes || {}).sort((a, b) => (b[1].in + b[1].out) - (a[1].in + a[1].out));
+    mk('#usage-classes', classes, (id) => CLS_NAMES[id] || id);
+    const days = (j.days || []).slice().reverse().map((d) => {
+      const v = (j.byDay[d].models && Object.values(j.byDay[d].models)) || [];
+      const agg = v.reduce((a, x) => ({ req: a.req + x.req, in: a.in + x.in, out: a.out + x.out }), { req: 0, in: 0, out: 0 });
+      return [d, agg];
+    });
+    mk('#usage-days', days, (id) => id);
+  } catch { }
+}
+$('#usage-refresh').onclick = refreshUsage;
+
+// ---------- 日志 ----------
 async function refreshLogs() {
   try {
     const r = await api('/api/logs'); const { logs } = await r.json();
@@ -263,16 +373,13 @@ async function refreshLogs() {
     for (const l of logs) {
       const d = document.createElement('div'); d.className = 'log-row';
       const st = l.status === 200 ? 'ok' : (l.status === 'ERR' ? 'err' : '');
-      d.innerHTML = `<span class="st ${st}">${l.status}</span><span>${l.model}</span><span style="margin-left:auto">${l.ms}ms</span>`;
+      d.innerHTML = `<span class="st ${st}">${l.status}</span><span>${escapeHtml(l.model)}${l.cls ? ` <span class="cls">· ${escapeHtml(l.cls)}</span>` : ''}</span><span style="margin-left:auto">${l.ms}ms</span>`;
       el.appendChild(d);
     }
   } catch {}
 }
 
 // ---------- 设置 ----------
-function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
 function makeHeaderRow(k, v) {
   const row = document.createElement('div'); row.className = 'hdr-row';
   const ki = document.createElement('input'); ki.className = 'hdr-k'; ki.placeholder = 'Header 名（如 Authorization）'; ki.value = k || '';
@@ -282,12 +389,29 @@ function makeHeaderRow(k, v) {
   return row;
 }
 
+function fillRoutingSelect(sel, value) {
+  if (!sel) return;
+  const models = (STATE && STATE.models) || [];
+  sel.innerHTML = '';
+  const opt0 = document.createElement('option'); opt0.value = ''; opt0.textContent = '（跟随默认模型）'; sel.appendChild(opt0);
+  for (const m of models) {
+    const o = document.createElement('option'); o.value = m.fullId; o.textContent = m.name;
+    if (m.fullId === value) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
 async function loadSettings() {
   const r = await api('/api/settings'); if (!r.ok) return;
   SETTINGS = await r.json();
   $('#set-host').value = SETTINGS.server.host;
   $('#set-port').value = SETTINGS.server.port;
   $('#set-key').value = SETTINGS.server.apiKey || '';
+  if (!STATE) await refreshState();
+  const rt = SETTINGS.routing || {};
+  $('#route-enabled').checked = !!rt.enabled;
+  fillRoutingSelect($('#route-subagent'), rt.subagentModel);
+  fillRoutingSelect($('#route-auxiliary'), rt.auxiliaryModel);
   const box = $('#set-providers'); box.innerHTML = '';
   for (const [pid, p] of Object.entries(SETTINGS.providers)) {
     const card = document.createElement('div'); card.className = 'prov'; card.dataset.pid = pid;
@@ -309,7 +433,11 @@ async function loadSettings() {
         <div class="hdrs"></div>
         <button class="hdr-add" type="button">+ 加 header</button>
       </div>
-      <div class="prov-models">模型：${models} <span class="hint">（改模型列表请手改 config.yaml）</span></div>
+      <div class="prov-models">模型：${models} <span class="hint">（⟳ 可从后端自动发现）</span></div>
+      <div class="fld" style="margin-top:10px">
+        <button class="hdr-add disc-btn" type="button" data-pid="${escapeHtml(pid)}">⟳ 从后端发现模型</button>
+      </div>
+      <div class="disc-box" id="disc-${escapeHtml(pid)}"></div>
     `;
     const hdrs = card.querySelector('.hdrs');
     const entries = Object.entries(p.headers || {});
@@ -323,7 +451,7 @@ async function loadSettings() {
 document.addEventListener('click', (e) => {
   if (e.target.closest('.hdr-add')) {
     const wrap = e.target.closest('.hdrs-wrap');
-    wrap.querySelector('.hdrs').appendChild(makeHeaderRow('', ''));
+    if (wrap) wrap.querySelector('.hdrs').appendChild(makeHeaderRow('', ''));
   } else if (e.target.closest('.hdr-del')) {
     const row = e.target.closest('.hdr-row');
     const hdrs = row.parentElement;
@@ -332,15 +460,57 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// 事件委托：发现模型（拉取 + 应用）
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.disc-btn');
+  if (btn) {
+    const pid = btn.dataset.pid;
+    const box = document.getElementById('disc-' + CSS.escape(pid));
+    if (!box) return;
+    box.innerHTML = '<div class="foot">探测中…</div>';
+    const r = await api('/api/discover', { method: 'POST', body: JSON.stringify({ provider: pid }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { box.innerHTML = `<div class="foot" style="color:var(--red)">${escapeHtml(j.error || '探测失败')}</div>`; return; }
+    if (!j.new.length) { box.innerHTML = `<div class="foot">后端共 ${j.found.length} 个模型，均已存在</div>`; return; }
+    box.innerHTML = '';
+    for (const id of j.new) {
+      const lab = document.createElement('label'); lab.className = 'disc-item';
+      lab.innerHTML = `<input type="checkbox" value="${escapeHtml(id)}"> ${escapeHtml(id)}`;
+      box.appendChild(lab);
+    }
+    const apply = document.createElement('button');
+    apply.className = 'primary disc-apply'; apply.type = 'button';
+    apply.dataset.pid = pid; apply.textContent = `添加所选（${j.new.length} 个新模型）`;
+    box.appendChild(apply);
+    return;
+  }
+  const ap = e.target.closest('.disc-apply');
+  if (ap) {
+    const pid = ap.dataset.pid;
+    const box = document.getElementById('disc-' + CSS.escape(pid));
+    if (!box) return;
+    const add = [...box.querySelectorAll('input[type=checkbox]:checked')].map((i) => i.value);
+    if (!add.length) return;
+    const r = await api('/api/discover/apply', { method: 'POST', body: JSON.stringify({ provider: pid, add }) });
+    if (r.ok) {
+      box.innerHTML = `<div class="foot">已添加 ${add.length} 个模型 ✓</div>`;
+      await refreshState();
+      loadSettings();
+    }
+  }
+});
+
 // ---------- 页签切换 ----------
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === 'tab-' + name));
   if (name === 'settings') loadSettings();
+  if (name === 'usage') refreshUsage();
 }
 document.querySelectorAll('.tab').forEach((t) => {
   t.onclick = () => switchTab(t.dataset.tab);
 });
+
 $('#save-btn').onclick = async () => {
   const msg = $('#set-msg');
   if (!SETTINGS) return;
@@ -349,6 +519,11 @@ $('#save-btn').onclick = async () => {
       host: $('#set-host').value.trim() || '127.0.0.1',
       port: $('#set-port').value.trim(),
       apiKey: $('#set-key').value,
+    },
+    routing: {
+      enabled: $('#route-enabled').checked,
+      subagentModel: $('#route-subagent').value,
+      auxiliaryModel: $('#route-auxiliary').value,
     },
     providers: {},
   };
@@ -394,6 +569,7 @@ $('#theme-btn').onclick = () => {
 refreshState(); refreshLogs();
 setInterval(refreshState, 4000);
 setInterval(refreshLogs, 4000);
+setInterval(() => { if (document.querySelector('#tab-usage.active')) refreshUsage(); }, 8000);
 </script>
 </body>
 </html>

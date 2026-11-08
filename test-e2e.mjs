@@ -39,11 +39,17 @@ function anthropicUpstream(req, body, res) {
     res.end();
   } else {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'm1', type: 'message', role: 'assistant', model: b.model, content: [{ type: 'text', text: 'anthropic-echo' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 2, output_tokens: 3 } }));
+    res.end(JSON.stringify({ id: 'm1', type: 'message', role: 'assistant', model: b.model, content: [{ type: 'text', text: 'anthropic-echo' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 2, output_tokens: 3, server_tool_use: { web_search_requests: 0 } } }));
   }
 }
 
 function openaiUpstream(req, body, res) {
+  // 模型发现探测（GET /v1/models）
+  if (req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'gpt-mock' }, { id: 'gpt-new' }] }));
+    return;
+  }
   const b = JSON.parse(body);
   if (b.stream) {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -104,18 +110,29 @@ async function main() {
   const dir = mkdtempSync(join(tmpdir(), 'model-proxy-test-'));
   const configPath = join(dir, 'config.yaml');
   const statePath = join(dir, 'state.json');
+  const mkJwt = (exp) => {
+    const h = Buffer.from('{"alg":"none"}').toString('base64url');
+    const p = Buffer.from(JSON.stringify({ exp })).toString('base64url');
+    return `${h}.${p}.sig`;
+  };
+  const jwtA = 'Bearer ' + mkJwt(2000000000);
+  const jwtB = 'Bearer ' + mkJwt(2000000100);
   writeFileSync(configPath, `server:
   host: 127.0.0.1
   port: 8799
   apiKey: ""
   selectedModel: cannbot/deepseek-v4-pro
+  routing:
+    enabled: true
+    subagentModel: mockopenai/gpt-mock
+    auxiliaryModel: cannbot/deepseek-v4-pro
 providers:
   cannbot:
     displayName: Mock-Anthropic
     protocol: anthropic
     baseURL: http://127.0.0.1:${anthropic.port}
     headers:
-      Authorization: Bearer mock
+      Authorization: ${jwtA}
     models:
       - id: deepseek-v4-pro
         name: Mock-Anth-Model
@@ -125,7 +142,7 @@ providers:
     protocol: openai
     baseURL: http://127.0.0.1:${openai.port}/v1
     headers:
-      Authorization: Bearer mock
+      Authorization: ${jwtB}
     models:
       - id: gpt-mock
         name: Mock-OpenAI-Model
@@ -134,7 +151,7 @@ providers:
 
   const proc = spawn(process.execPath, ['server.mjs'], {
     cwd: dirname(fileURLToPath(import.meta.url)),
-    env: { ...process.env, MODEL_PROXY_CONFIG: configPath, MODEL_PROXY_STATE: statePath },
+    env: { ...process.env, MODEL_PROXY_CONFIG: configPath, MODEL_PROXY_STATE: statePath, MODEL_PROXY_USAGE: join(dir, 'usage.json') },
     stdio: ['pipe', 'ignore', 'inherit'],
   });
   proc.stdin.end();
@@ -229,7 +246,61 @@ providers:
       assert.ok(r.body.includes('[DONE]'));
     });
 
-    // 10) 设置接口：通用 provider 结构
+    // 10) 多 provider JWT：取最早过期
+    await ok('多 provider JWT 取最早过期', async () => {
+      const j = JSON.parse((await get(P, '/api/state')).body);
+      assert.ok(Array.isArray(j.tokens) && j.tokens.length === 2, 'tokens 有两项');
+      assert.strictEqual(j.token.providerId, 'cannbot');
+      assert.strictEqual(j.token.exp, 2000000000);
+    });
+
+    // 10b) 智能路由：subagent 分流 / 显式优先 / main 走默认
+    await ok('智能路由：subagent 提示头分流到指定模型', async () => {
+      const r = await post(P, '/v1/messages', { model: 'whatever', messages: [{ role: 'user', content: 'hi' }], max_tokens: 10 }, { 'x-claude-code-request-class': 'subagent' });
+      assert.strictEqual(r.status, 200);
+      const j = JSON.parse(r.body);
+      assert.strictEqual(j.model, 'gpt-mock', '走了 subagentModel 指定的 openai 后端');
+      const st = JSON.parse((await get(P, '/api/state')).body);
+      assert.strictEqual(st.routing.enabled, true);
+      assert.strictEqual(st.routing.hintHeadersSeen, true, '提示头被检测到');
+    });
+    await ok('智能路由：显式模型选择优先于路由', async () => {
+      const r = await post(P, '/v1/messages', { model: 'cannbot/deepseek-v4-pro', messages: [{ role: 'user', content: 'hi' }], max_tokens: 10 }, { 'x-claude-code-request-class': 'subagent' });
+      const j = JSON.parse(r.body);
+      assert.strictEqual(j.model, 'deepseek-v4-pro');
+    });
+    await ok('智能路由：main 类走面板默认', async () => {
+      const r = await post(P, '/v1/messages', { model: 'whatever', messages: [{ role: 'user', content: 'hi' }], max_tokens: 10 }, { 'x-claude-code-request-class': 'main' });
+      const j = JSON.parse(r.body);
+      assert.strictEqual(j.model, 'deepseek-v4-pro');
+    });
+    await ok('用量统计：按模型/类型记账', async () => {
+      const r = await get(P, '/api/usage?days=1');
+      const j = JSON.parse(r.body);
+      assert.ok(j.totals.models['mockopenai/gpt-mock'], '有 gpt-mock 记录');
+      assert.ok(j.totals.models['mockopenai/gpt-mock'].req >= 1);
+      assert.ok(j.totals.models['cannbot/deepseek-v4-pro'].in >= 2, '记到输入 token');
+      assert.ok(j.totals.classes.subagent && j.totals.classes.subagent.req >= 1, '按类型记账');
+    });
+    await ok('测速：/api/ping 返回各模型延迟', async () => {
+      const r = await post(P, '/api/ping', {});
+      assert.strictEqual(r.status, 200);
+      const j = JSON.parse(r.body);
+      assert.strictEqual(j.results['cannbot/deepseek-v4-pro'].status, 200);
+      assert.strictEqual(j.results['mockopenai/gpt-mock'].status, 200);
+    });
+    await ok('模型发现：拉取后端列表并添加新模型', async () => {
+      const r = await post(P, '/api/discover', { provider: 'mockopenai' });
+      const j = JSON.parse(r.body);
+      assert.ok(j.found.includes('gpt-mock') && j.found.includes('gpt-new'));
+      assert.ok(j.new.includes('gpt-new'), '识别出新模型');
+      const a = await post(P, '/api/discover/apply', { provider: 'mockopenai', add: ['gpt-new'] });
+      assert.strictEqual(a.status, 200);
+      const st = JSON.parse((await get(P, '/api/state')).body);
+      assert.ok(st.models.some((m) => m.fullId === 'mockopenai/gpt-new'), '新模型已入列');
+    });
+
+    // 11) 设置接口：通用 provider 结构
     await ok('GET /api/settings 返回通用 provider 结构', async () => {
       const r = await get(P, '/api/settings');
       assert.strictEqual(r.status, 200);
@@ -237,7 +308,7 @@ providers:
       const c = j.providers.cannbot;
       assert.strictEqual(c.protocol, 'anthropic');
       assert.strictEqual(c.baseURL, `http://127.0.0.1:${anthropic.port}`);
-      assert.deepStrictEqual(c.headers, { Authorization: 'Bearer mock' });
+      assert.deepStrictEqual(c.headers, { Authorization: jwtA });
       assert.deepStrictEqual(c.models, ['deepseek-v4-pro']);
       assert.strictEqual(j.providers.mockopenai.protocol, 'openai');
     });

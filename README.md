@@ -102,6 +102,22 @@ model_provider = "cannbot"
 
 `baseURL` 要写成「再拼 `/chat/completions` 就完整」的地址（OpenAI 官方是 `.../v1`）。本地 http 后端（vLLM/Ollama）直接写 `http://...` 即可。
 
+## 智能路由（省 token）
+
+Claude Code 开启 `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` 后，每个请求都会带分类标记（主对话 / 子代理 / 后台任务）。代理据此分流：
+
+- 主对话（main）→ 面板默认模型
+- 子代理（subagent / workflow）→ 设置里指定的便宜模型
+- 后台任务（auxiliary / compaction，如会话标题、自动压缩）→ 设置里指定的便宜模型
+
+优先级：**显式 `/model` 选择 > 智能路由 > 面板默认**。「设置」页可开关并指定目标模型；「模型」页状态卡实时显示是否检测到客户端提示头。
+
+## 测速 / 用量 / 模型发现
+
+- **测速**：「模型」页 ⚡ 按钮，对每个模型并行发 `max_tokens=1` 的最小请求，延迟徽章显示在模型卡上（绿 <3s · 黄 <8s · 红）
+- **用量**：「用量」页按模型 / 按请求类型 / 按天聚合 token 消耗（`usage.json`，保留 90 天）。直通路径采用旁路嗅探，不改动转发字节流
+- **模型发现**：「设置」页 provider 卡片的「⟳ 从后端发现模型」，调后端 `/models` 列表接口，勾选新模型一键写入 config。适用于标准 OpenAI 兼容后端（OpenAI / DeepSeek 官方 / vLLM / Ollama）；CANNBot 网关无列表接口，会报错但不影响其它功能
+
 ## 行为细节
 
 - 收到的请求若未指定可识别的模型（如 `model-proxy`、`claude-sonnet-*` 等），一律用窗口里选中的默认模型

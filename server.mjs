@@ -26,6 +26,8 @@ const MAX_BODY = 50 * 1024 * 1024;
 let config = loadConfig();
 let state = loadState();
 const logs = []; // 最近请求日志（内存环形，面板轮询显示）
+const latencies = {}; // fullId -> { ms, status, ts }（测速结果，面板轮询显示）
+let hintHeadersSeen = false; // 是否检测到客户端请求分类提示头（智能路由依赖）
 
 function loadConfig() {
   return parseYaml(readFileSync(CONFIG_PATH, 'utf8'));
@@ -36,6 +38,37 @@ function loadState() {
   }
   return {};
 }
+
+// ---------- 用量统计 ----------
+// usage[YYYY-MM-DD] = { models: { fullId: {req,in,out} }, classes: { main/subagent/...: {...} } }
+const USAGE_PATH = process.env.MODEL_PROXY_USAGE || join(__dirname, 'usage.json');
+let usage = (() => { try { return JSON.parse(readFileSync(USAGE_PATH, 'utf8')) || {}; } catch { return {}; } })();
+let usageDirty = false, usageLastFlush = 0;
+function flushUsage(force) {
+  if (!usageDirty) return;
+  const now = Date.now();
+  if (!force && now - usageLastFlush < 5000) return;
+  usageLastFlush = now; usageDirty = false;
+  try {
+    const days = Object.keys(usage).sort();
+    while (days.length > 90) delete usage[days.shift()]; // 只保留最近 90 天
+    writeFileSync(USAGE_PATH, JSON.stringify(usage));
+  } catch { /* ignore */ }
+}
+function recordUsage(model, cls, inputTokens, outputTokens) {
+  inputTokens = Number(inputTokens) || 0;
+  outputTokens = Number(outputTokens) || 0;
+  if (!inputTokens && !outputTokens) return;
+  const day = new Date().toISOString().slice(0, 10);
+  const d = (usage[day] = usage[day] || { models: {}, classes: {} });
+  for (const [key, bucket] of [[model, d.models], [cls || 'unknown', d.classes]]) {
+    const b = (bucket[key] = bucket[key] || { req: 0, in: 0, out: 0 });
+    b.req += 1; b.in += inputTokens; b.out += outputTokens;
+  }
+  usageDirty = true;
+  flushUsage(false);
+}
+setInterval(() => flushUsage(true), 15000).unref?.();
 
 // 由控制台写回 config.yaml 时使用的文件头注释
 const CONFIG_HEADER = '# model-proxy · 配置文件\n# 监听地址 / api-key / 各 provider 鉴权都可以在控制台「设置」里改，也可以手改本文件。\n# 注意：本文件含明文密钥，请勿外传。\n\n';
@@ -98,33 +131,52 @@ function fullIdFromAlias(alias) {
   return alias && alias.startsWith(ALIAS_PREFIX) ? alias.slice(ALIAS_PREFIX.length) : null;
 }
 
+// ---------- 智能路由 ----------
+// Claude Code 开启 CLAUDE_CODE_GATEWAY_HINT_HEADERS=1 后，每个请求都带
+// x-claude-code-request-class（main/subagent/workflow/compaction/auxiliary）。
+// 路由只作用于「落到默认模型」的请求；显式选择的模型（别名或 provider/id）永远优先。
+function getRouting() {
+  return config.server?.routing || {};
+}
+function classModel(cls) {
+  const r = getRouting();
+  if (!r.enabled) return null;
+  if (cls === 'subagent' || cls === 'workflow') return r.subagentModel || null;
+  if (cls === 'auxiliary' || cls === 'compaction') return r.auxiliaryModel || null;
+  return null; // main / 未知分类 → 默认模型
+}
+
 // 决定本次请求最终用哪个模型：
 //   1) 带别名前缀（/model 选择器选的）→ 显式命中
 //   2) 直接是 "provider/modelId" 且能解析 → 显式命中
-//   3) 否则 → 用面板里的默认（App 内选）
-function pickTarget(requestModel) {
+//   3) 否则 → 面板默认；若客户端带了请求分类提示头且智能路由开启，按类改写
+function pickTarget(requestModel, cls) {
   const viaAlias = fullIdFromAlias(requestModel);
   if (viaAlias) { try { return resolveModel(viaAlias); } catch { /* 落到默认 */ } }
   if (requestModel && requestModel.includes('/')) {
     try { return resolveModel(requestModel); } catch { /* 落到默认 */ }
   }
-  const s = selectedFullId();
+  let s = selectedFullId();
+  if (cls) {
+    const r = classModel(cls);
+    if (r) { try { resolveModel(r); s = r; } catch { /* 路由目标失效则退回默认 */ } }
+  }
   if (!s) throw new Error('没有可用模型，请检查 config.yaml 的 providers');
   return resolveModel(s);
 }
 
-// ---------- JWT 过期时间 ----------
-function tokenExpiry() {
-  for (const p of Object.values(config.providers || {})) {
+// ---------- JWT 过期时间（逐个 provider 统计）----------
+function tokensExpiry() {
+  const out = [];
+  for (const [pid, p] of allProviders()) {
     const m = (p.headers?.Authorization || '').match(/Bearer\s+([A-Za-z0-9\-_.]+)/);
-    if (m) {
-      try {
-        const payload = JSON.parse(Buffer.from(m[1].split('.')[1], 'base64url').toString('utf8'));
-        if (payload.exp) return { exp: payload.exp, remainingMs: payload.exp * 1000 - Date.now() };
-      } catch { /* ignore */ }
-    }
+    if (!m) continue;
+    try {
+      const payload = JSON.parse(Buffer.from(m[1].split('.')[1], 'base64url').toString('utf8'));
+      if (payload.exp) out.push({ providerId: pid, displayName: p.displayName || pid, exp: payload.exp, remainingMs: payload.exp * 1000 - Date.now() });
+    } catch { /* ignore */ }
   }
-  return null;
+  return out;
 }
 
 // ---------- 转发 ----------
@@ -134,6 +186,113 @@ function providerProtocol(provider) {
 
 function safeJson(s) {
   try { return JSON.parse(s); } catch { return null; }
+}
+
+// 对后端发一次裸请求（测速/模型发现用），带 provider 自己的鉴权头
+function upstreamCall(provider, method, url, body) {
+  return new Promise((resolve) => {
+    try {
+      const target = new URL(url);
+      const transport = target.protocol === 'http:' ? http : https;
+      const headers = { ...(provider.headers || {}) };
+      if (body) headers['content-type'] = 'application/json';
+      const req = transport.request({
+        hostname: target.hostname,
+        port: target.port || (target.protocol === 'http:' ? 80 : 443),
+        path: target.pathname + target.search,
+        method, headers, timeout: 15000,
+      }, (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      });
+      req.on('timeout', () => req.destroy(new Error('timeout')));
+      req.on('error', (e) => resolve({ status: 'ERR', body: e.message }));
+      if (body) req.write(JSON.stringify(body));
+      req.end();
+    } catch (e) { resolve({ status: 'ERR', body: e.message }); }
+  });
+}
+
+// 模型发现端点：优先 discoveryURL（如 CANNBot 的 openai 兼容端点），否则按协议推导
+function modelsEndpoint(provider) {
+  if (provider.discoveryURL) return provider.discoveryURL.replace(/\/+$/, '') + '/models';
+  const base = (provider.baseURL || '').replace(/\/+$/, '');
+  return providerProtocol(provider) === 'openai' ? base + '/models' : base + '/v1/models';
+}
+
+// 从响应文本里取最后一个 "usage" 对象。括号配平解析：兼容嵌套字段
+// （真实后端的 usage 可能带 server_tool_use:{} 这类嵌套，扁平正则会失配）。
+function extractUsageObject(text) {
+  const key = '"usage"';
+  const idx = text.lastIndexOf(key);
+  if (idx < 0) return null;
+  let i = idx + key.length;
+  while (i < text.length && /\s/.test(text[i])) i++;
+  if (text[i] !== ':') return null;
+  i++;
+  while (i < text.length && /\s/.test(text[i])) i++;
+  if (text[i] !== '{') return null;
+  const start = i;
+  let depth = 0, inStr = false, esc = false;
+  for (let j = start; j < text.length; j++) {
+    const ch = text[j];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\') { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(text.slice(start, j + 1)); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+// 直通路径的用量嗅探：不改动字节流，旁路提取 usage（尽力而为，失败不影响转发）
+function snoopUsage(backendProtocol, upRes, model, cls) {
+  try {
+    if (String(upRes.headers['content-type'] || '').includes('text/event-stream')) {
+      // SSE：逐行解析事件流里的 usage（anthropic 在 message_start/message_delta，openai 在最后一个 chunk）
+      let buf = '', input = 0, output = 0;
+      upRes.on('data', (c) => {
+        try {
+          buf += c.toString('utf8');
+          let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i).trim();
+            buf = buf.slice(i + 1);
+            if (!line.startsWith('data:')) continue;
+            const obj = safeJson(line.slice(5).trim());
+            if (!obj) continue;
+            if (backendProtocol === 'anthropic') {
+              if (obj.type === 'message_start') input = obj.message?.usage?.input_tokens ?? input;
+              if (obj.type === 'message_delta') output = obj.usage?.output_tokens ?? output;
+            } else if (obj.usage) {
+              input = obj.usage.prompt_tokens ?? input;
+              output = obj.usage.completion_tokens ?? output;
+            }
+          }
+        } catch { /* ignore */ }
+      });
+      upRes.on('end', () => recordUsage(model, cls, input, output));
+    } else {
+      // 非流式：JSON 尾部取最后一个 usage 对象（两协议的 usage 都在 body 末尾附近）
+      let tail = '';
+      upRes.on('data', (c) => { tail += c.toString('utf8'); if (tail.length > 65536) tail = tail.slice(-32768); });
+      upRes.on('end', () => {
+        try {
+          const u = extractUsageObject(tail) || {};
+          recordUsage(model, cls,
+            backendProtocol === 'anthropic' ? u.input_tokens : u.prompt_tokens,
+            backendProtocol === 'anthropic' ? u.output_tokens : u.completion_tokens);
+        } catch { /* ignore */ }
+      });
+    }
+  } catch { /* ignore */ }
 }
 
 function readResponseBody(res) {
@@ -146,7 +305,7 @@ function readResponseBody(res) {
 }
 
 // 泛化转发：backendBody 已是「后端协议」格式。同协议直通，跨协议翻译响应/流。
-function forward(target, frontendProtocol, backendBody, clientReq, clientRes) {
+function forward(target, frontendProtocol, backendBody, clientReq, clientRes, cls) {
   const backendProtocol = providerProtocol(target.provider);
   const base = (target.provider.baseURL || '').replace(/\/+$/, '');
   const upstreamPath = backendProtocol === 'openai'
@@ -178,21 +337,22 @@ function forward(target, frontendProtocol, backendBody, clientReq, clientRes) {
     if (status >= 400) {
       clientRes.writeHead(status, upRes.headers);
       upRes.pipe(clientRes);
-      upRes.on('end', () => addLog({ ts: Date.now(), model, status, ms: Date.now() - started }));
+      upRes.on('end', () => addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls }));
       return;
     }
     try {
-      // 同协议：完全直通，保持与旧版一致的行为
+      // 同协议：完全直通，保持与旧版一致的行为（旁路嗅探用量，不动字节流）
       if (frontendProtocol === backendProtocol) {
         clientRes.writeHead(status, upRes.headers);
+        snoopUsage(backendProtocol, upRes, model, cls);
         upRes.pipe(clientRes);
-        upRes.on('end', () => addLog({ ts: Date.now(), model, status, ms: Date.now() - started }));
+        upRes.on('end', () => addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls }));
         return;
       }
       if (isStream) {
         clientRes.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
-        await streamToFrontend(frontendProtocol, backendProtocol, upRes, clientRes, target.modelId);
-        addLog({ ts: Date.now(), model, status, ms: Date.now() - started });
+        await streamToFrontend(frontendProtocol, backendProtocol, upRes, clientRes, target.modelId, (i, o) => recordUsage(model, cls, i, o));
+        addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls });
         clientRes.end();
       } else {
         const bodyStr = await readResponseBody(upRes);
@@ -201,18 +361,25 @@ function forward(target, frontendProtocol, backendBody, clientReq, clientRes) {
         if (parsed && typeof parsed === 'object') {
           try { out = buildFrontendResponse(frontendProtocol, backendProtocol, parsed); } catch { out = parsed; }
         }
+        // 用量统计：从翻译后的响应提取（前端协议的 usage 字段形状）
+        try {
+          const uu = (out && out.usage) || {};
+          recordUsage(model, cls,
+            frontendProtocol === 'openai' ? uu.prompt_tokens : uu.input_tokens,
+            frontendProtocol === 'openai' ? uu.completion_tokens : uu.output_tokens);
+        } catch { /* ignore */ }
         clientRes.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         clientRes.end(typeof out === 'string' ? out : JSON.stringify(out));
-        addLog({ ts: Date.now(), model, status, ms: Date.now() - started });
+        addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls });
       }
     } catch (e) {
-      addLog({ ts: Date.now(), model, status: 'ERR', ms: Date.now() - started, err: e.message });
+      addLog({ ts: Date.now(), model, status: 'ERR', ms: Date.now() - started, err: e.message, cls });
       if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
       clientRes.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: e.message } }));
     }
   });
   upstream.on('error', (e) => {
-    addLog({ ts: Date.now(), model, status: 'ERR', ms: Date.now() - started, err: e.message });
+    addLog({ ts: Date.now(), model, status: 'ERR', ms: Date.now() - started, err: e.message, cls });
     if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
     clientRes.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: e.message } }));
   });
@@ -241,12 +408,25 @@ function readBody(req) {
 }
 
 // ---------- 对外鉴权 ----------
+function isLoopback(req) {
+  const a = req.socket?.remoteAddress || '';
+  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+}
+
 function authOk(req) {
   const key = config.server?.apiKey;
-  if (!key) return true; // 未配置 = 仅信任本机
+  if (!key) return true; // 未配置 = 模型接口不要求鉴权
   const given = req.headers['x-api-key']
     || (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
   return given === key;
+}
+
+// 管理接口鉴权：本机 loopback 始终可信（面板）；远程访问才要求对外 api-key
+function adminOk(req) {
+  if (isLoopback(req)) return true;
+  const key = config.server?.apiKey;
+  if (!key) return false; // 未配 key 时，远程管理一律拒绝
+  return authOk(req);
 }
 
 function json(res, status, obj) {
@@ -254,22 +434,25 @@ function json(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
-// 各前端协议共用的补全入口：鉴权 → 选模型 → 翻译成后端协议 → 转发
+// 各前端协议共用的补全入口：鉴权 → 选模型（含智能路由）→ 翻译成后端协议 → 转发
 async function handleCompletion(frontendProtocol, req, res) {
   if (!authOk(req)) return json(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'invalid api key' } });
+  // Claude Code 开 CLAUDE_CODE_GATEWAY_HINT_HEADERS=1 后会带请求分类提示头，智能路由据此分流
+  const cls = String(req.headers['x-claude-code-request-class'] || '').toLowerCase() || null;
+  if (cls) hintHeadersSeen = true;
   let bodyStr;
   try { bodyStr = await readBody(req); } catch (e) { return json(res, 413, { type: 'error', error: { type: 'invalid_request_error', message: e.message } }); }
   let body;
   try { body = JSON.parse(bodyStr); } catch { return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid json body' } }); }
   let target;
-  try { target = pickTarget(body.model); } catch (e) { return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: e.message } }); }
+  try { target = pickTarget(body.model, cls); } catch (e) { return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: e.message } }); }
   let backendBody;
   try {
     backendBody = buildBackendRequest(frontendProtocol, providerProtocol(target.provider), body, target.modelId);
   } catch (e) {
     return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: e.message } });
   }
-  return forward(target, frontendProtocol, backendBody, req, res);
+  return forward(target, frontendProtocol, backendBody, req, res, cls);
 }
 
 // ---------- HTTP 路由 ----------
@@ -323,11 +506,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (path.startsWith('/api/') && path !== '/api/hello') {
-      // 设置了对外 api-key 后，控制接口也要带同值（GET / 面板本身除外）
-      if (!authOk(req)) return json(res, 401, { error: '需要 api-key（在设置里配置的那个）' });
+      // 管理接口：本机 loopback 始终可信；远程访问才要求对外 api-key
+      if (!adminOk(req)) return json(res, 401, { error: '需要 api-key（在设置里配置的那个）' });
 
       if (path === '/api/state' && req.method === 'GET') {
-        const exp = tokenExpiry();
+        const tokens = tokensExpiry();
+        const soonest = tokens.length ? tokens.reduce((a, b) => (b.remainingMs < a.remainingMs ? b : a)) : null;
         return json(res, 200, {
           server: {
             host: config.server?.host || '127.0.0.1',
@@ -337,7 +521,15 @@ const server = http.createServer(async (req, res) => {
           selected: selectedFullId(),
           models: providerModels().map((m) => ({ ...m, alias: aliasFor(m.fullId) })),
           providers: allProviders().map(([id, p]) => ({ id, displayName: p.displayName || id, baseURL: p.baseURL })),
-          token: exp ? { exp: exp.exp, remainingMs: exp.remainingMs } : null,
+          tokens,
+          token: soonest,
+          latencies,
+          routing: {
+            enabled: !!getRouting().enabled,
+            subagentModel: getRouting().subagentModel || null,
+            auxiliaryModel: getRouting().auxiliaryModel || null,
+            hintHeadersSeen,
+          },
         });
       }
       if (path === '/api/settings' && req.method === 'GET') {
@@ -356,6 +548,11 @@ const server = http.createServer(async (req, res) => {
             host: config.server?.host || '127.0.0.1',
             port: config.server?.port || 8787,
             apiKey: config.server?.apiKey || '',
+          },
+          routing: {
+            enabled: !!getRouting().enabled,
+            subagentModel: getRouting().subagentModel || '',
+            auxiliaryModel: getRouting().auxiliaryModel || '',
           },
           providers,
         });
@@ -388,6 +585,21 @@ const server = http.createServer(async (req, res) => {
             p.headers = headers;
           }
         }
+        // 智能路由设置（模型 id 会校验；无效则整体回滚）
+        if (b.routing && typeof b.routing === 'object') {
+          const r = { enabled: !!b.routing.enabled };
+          for (const k of ['subagentModel', 'auxiliaryModel']) {
+            const v = String(b.routing[k] || '').trim();
+            if (v) {
+              try { resolveModel(v); } catch (e) {
+                config = snapshot;
+                return json(res, 400, { error: `路由模型无效（${k}）: ${v}` });
+              }
+              r[k] = v;
+            }
+          }
+          config.server.routing = r;
+        }
         try {
           writeFileSync(CONFIG_PATH, CONFIG_HEADER + stringifyYaml(config), 'utf8');
         } catch (e) {
@@ -411,6 +623,70 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         return json(res, 200, { ok: true });
+      }
+      if (path === '/api/ping' && req.method === 'POST') {
+        // 模型测速：对每个模型发一个 max_tokens=1 的最小请求，并行探测并记录延迟
+        const results = {};
+        await Promise.all(providerModels().map(async (m) => {
+          const p = config.providers[m.providerId];
+          const base = (p.baseURL || '').replace(/\/+$/, '');
+          const ep = providerProtocol(p) === 'openai' ? '/chat/completions' : '/v1/messages';
+          const t0 = Date.now();
+          const r = await upstreamCall(p, 'POST', base + ep, { model: m.modelId, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] });
+          const rec = { ms: Date.now() - t0, status: r.status, ts: Date.now() };
+          latencies[m.fullId] = rec;
+          results[m.fullId] = rec;
+        }));
+        return json(res, 200, { ok: true, results });
+      }
+      if (path === '/api/discover' && req.method === 'POST') {
+        // 从后端拉取模型列表（只读，不落盘）
+        const b = JSON.parse(await readBody(req));
+        const p = config.providers?.[b.provider];
+        if (!p) return json(res, 400, { error: `未知 provider: ${b.provider}` });
+        const r = await upstreamCall(p, 'GET', modelsEndpoint(p));
+        if (r.status !== 200) return json(res, 502, { error: `后端返回 ${r.status}: ${String(r.body).slice(0, 200)}` });
+        const parsed = safeJson(r.body) || {};
+        const ids = (Array.isArray(parsed.data) ? parsed.data : []).map((d) => d && d.id).filter((x) => typeof x === 'string' && x);
+        const existing = new Set((p.models || []).map((m) => m.id));
+        return json(res, 200, { provider: b.provider, found: ids, existing: ids.filter((x) => existing.has(x)), new: ids.filter((x) => !existing.has(x)) });
+      }
+      if (path === '/api/discover/apply' && req.method === 'POST') {
+        // 把选中的新模型写进 config.yaml
+        const b = JSON.parse(await readBody(req));
+        const p = config.providers?.[b.provider];
+        if (!p) return json(res, 400, { error: `未知 provider: ${b.provider}` });
+        p.models = p.models || [];
+        const have = new Set(p.models.map((m) => m.id));
+        const added = [];
+        for (const id of Array.isArray(b.add) ? b.add : []) {
+          const mid = String(id).trim();
+          if (!mid || have.has(mid)) continue;
+          p.models.push({ id: mid, name: mid, contextWindow: 0 });
+          have.add(mid);
+          added.push(mid);
+        }
+        try { writeFileSync(CONFIG_PATH, CONFIG_HEADER + stringifyYaml(config), 'utf8'); } catch (e) { return json(res, 500, { error: '写 config.yaml 失败: ' + e.message }); }
+        return json(res, 200, { ok: true, added, models: p.models.map((m) => m.id) });
+      }
+      if (path === '/api/usage' && req.method === 'GET') {
+        // 用量统计：默认聚合最近 7 天
+        flushUsage(true);
+        const days = Math.min(parseInt(u.searchParams.get('days') || '7', 10) || 7, 90);
+        const keys = Object.keys(usage).sort().slice(-days);
+        const byDay = {};
+        const totals = { models: {}, classes: {}, req: 0, in: 0, out: 0 };
+        for (const k of keys) {
+          byDay[k] = JSON.parse(JSON.stringify(usage[k]));
+          for (const grp of ['models', 'classes']) {
+            for (const [id, v] of Object.entries(usage[k][grp] || {})) {
+              const t = (totals[grp][id] = totals[grp][id] || { req: 0, in: 0, out: 0 });
+              t.req += v.req; t.in += v.in; t.out += v.out;
+            }
+          }
+          for (const v of Object.values(usage[k].models || {})) { totals.req += v.req; totals.in += v.in; totals.out += v.out; }
+        }
+        return json(res, 200, { days: keys, byDay, totals });
       }
       if (path === '/api/select' && req.method === 'POST') {
         const b = JSON.parse(await readBody(req));
@@ -455,7 +731,7 @@ export function startServer() {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {
-      console.log(`✅ model-proxy已启动: http://${host}:${port}`);
+      console.log(`✅ model-proxy 已启动: http://${host}:${port}`);
       console.log(`   控制台: http://${host}:${port}/`);
       console.log(`   Claude Code 请把 ANTHROPIC_BASE_URL 指向 http://${host}:${port}`);
       console.log(`   当前默认模型: ${selectedFullId()}`);

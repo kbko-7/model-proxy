@@ -317,7 +317,7 @@ function mapOpenAIStop(r) {
 }
 
 // OpenAI chat 流 -> Anthropic 流
-async function openaiStreamToAnthropic(upRes, clientRes, modelId) {
+async function openaiStreamToAnthropic(upRes, clientRes, modelId, onUsage) {
   const id = genId('msg');
   const write = (event, data) => clientRes.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   let started = false;
@@ -363,10 +363,11 @@ async function openaiStreamToAnthropic(upRes, clientRes, modelId) {
   for (const t of tools.values()) write('content_block_stop', { type: 'content_block_stop', index: t.idx });
   write('message_delta', { type: 'message_delta', delta: { stop_reason: mapOpenAIStop(finishReason), stop_sequence: null }, usage: { output_tokens: outputTokens } });
   write('message_stop', { type: 'message_stop' });
+  if (onUsage) onUsage(inputTokens, outputTokens);
 }
 
 // Anthropic 流 -> OpenAI chat 流
-async function anthropicStreamToOpenai(upRes, clientRes, modelId) {
+async function anthropicStreamToOpenai(upRes, clientRes, modelId, onUsage) {
   const id = genId('chatcmpl');
   const created = Math.floor(Date.now() / 1000);
   const send = (delta, finish, usage) => {
@@ -413,10 +414,11 @@ async function anthropicStreamToOpenai(upRes, clientRes, modelId) {
   const outUsage = usage ? { prompt_tokens: usage.input_tokens ?? 0, completion_tokens: usage.output_tokens ?? 0, total_tokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) } : undefined;
   send({}, mapAnthropicStop(finishReason), outUsage);
   clientRes.write('data: [DONE]\n\n');
+  if (onUsage) onUsage(usage ? (usage.input_tokens ?? 0) : 0, usage ? (usage.output_tokens ?? 0) : 0);
 }
 
 // OpenAI chat 流 -> Responses 流
-async function openaiStreamToResponses(upRes, clientRes, modelId) {
+async function openaiStreamToResponses(upRes, clientRes, modelId, onUsage) {
   const respId = genId('resp');
   const msgId = genId('msg');
   const created = Math.floor(Date.now() / 1000);
@@ -473,10 +475,11 @@ async function openaiStreamToResponses(upRes, clientRes, modelId) {
   if (phase === 'text') output.push({ id: msgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text, annotations: [] }] });
   for (const f of funcs.values()) output.push({ id: f.id, type: 'function_call', status: 'completed', call_id: f.callId, name: f.name, arguments: f.args });
   ev('response.completed', { type: 'response.completed', response: { id: respId, object: 'response', created_at: created, status: 'completed', model: modelId, output, usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens } } });
+  if (onUsage) onUsage(inputTokens, outputTokens);
 }
 
 // Anthropic 流 -> Responses 流
-async function anthropicStreamToResponses(upRes, clientRes, modelId) {
+async function anthropicStreamToResponses(upRes, clientRes, modelId, onUsage) {
   const respId = genId('resp');
   const msgId = genId('msg');
   const created = Math.floor(Date.now() / 1000);
@@ -530,13 +533,15 @@ async function anthropicStreamToResponses(upRes, clientRes, modelId) {
   if (phase === 'text') output.push({ id: msgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text, annotations: [] }] });
   for (const f of funcs.values()) output.push({ id: f.id, type: 'function_call', status: 'completed', call_id: f.callId, name: f.name, arguments: f.args });
   ev('response.completed', { type: 'response.completed', response: { id: respId, object: 'response', created_at: created, status: 'completed', model: modelId, output, usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens } } });
+  if (onUsage) onUsage(inputTokens, outputTokens);
 }
 
 // 统一的「后端流 -> 前端流」。frontendProtocol === backendProtocol 时不走这里（由调用方直通）。
-export async function streamToFrontend(frontendProtocol, backendProtocol, upRes, clientRes, modelId) {
-  if (frontendProtocol === 'anthropic' && backendProtocol === 'openai') return openaiStreamToAnthropic(upRes, clientRes, modelId);
-  if (frontendProtocol === 'openai' && backendProtocol === 'anthropic') return anthropicStreamToOpenai(upRes, clientRes, modelId);
-  if (frontendProtocol === 'openai-responses' && backendProtocol === 'openai') return openaiStreamToResponses(upRes, clientRes, modelId);
-  if (frontendProtocol === 'openai-responses' && backendProtocol === 'anthropic') return anthropicStreamToResponses(upRes, clientRes, modelId);
+// onUsage(i, o)：翻译完成时回报告的输入/输出 token 数（用量统计用，可缺省）。
+export async function streamToFrontend(frontendProtocol, backendProtocol, upRes, clientRes, modelId, onUsage) {
+  if (frontendProtocol === 'anthropic' && backendProtocol === 'openai') return openaiStreamToAnthropic(upRes, clientRes, modelId, onUsage);
+  if (frontendProtocol === 'openai' && backendProtocol === 'anthropic') return anthropicStreamToOpenai(upRes, clientRes, modelId, onUsage);
+  if (frontendProtocol === 'openai-responses' && backendProtocol === 'openai') return openaiStreamToResponses(upRes, clientRes, modelId, onUsage);
+  if (frontendProtocol === 'openai-responses' && backendProtocol === 'anthropic') return anthropicStreamToResponses(upRes, clientRes, modelId, onUsage);
   throw new Error(`不支持的流式翻译: ${backendProtocol} -> ${frontendProtocol}`);
 }
