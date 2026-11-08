@@ -75,8 +75,12 @@ def wait_proxy(timeout=15):
 def make_icon():
     img = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((4, 4, 60, 60), radius=14, fill=(110, 123, 255, 255))  # #6e7bff
-    d.ellipse((22, 22, 42, 42), fill=(255, 255, 255, 255))
+    # 圆角方块（靛蓝，与 UI 主色 #6e7bff 一致）
+    d.rounded_rectangle((3, 3, 61, 61), radius=14, fill=(110, 123, 255, 255))
+    # 分层堆叠：三条白色胶囊（多协议分层）
+    white = (255, 255, 255, 255)
+    for yc in (23, 32, 41):
+        d.rounded_rectangle((12, yc - 3, 52, yc + 3), radius=3, fill=white)
     return img
 
 
