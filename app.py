@@ -81,11 +81,18 @@ def make_icon():
 
 
 def show_window(_icon=None, _item=None):
-    if window is not None:
-        try:
-            window.show()
-        except Exception:
-            pass
+    if window is None:
+        return
+    try:
+        window.restore()
+        window.show()
+        # Windows 下 show() 只是重新显示，常被别的窗口压在后面、抢不到前台焦点；
+        # 「置顶 → 取消置顶」是 Z 序操作，不受前台锁限制，能可靠把它提到最前。
+        if os.name == "nt":
+            window.on_top = True
+            window.on_top = False
+    except Exception:
+        pass
 
 
 def on_closing():
@@ -126,7 +133,8 @@ def main():
         make_icon(),
         "CANNBot 模型代理",
         menu=pystray.Menu(
-            pystray.MenuItem("打开面板", show_window),
+            # default=True：Windows 下左键单击托盘图标即触发「打开面板」
+            pystray.MenuItem("打开面板", show_window, default=True),
             pystray.MenuItem("退出", quit_app),
         ),
     )
