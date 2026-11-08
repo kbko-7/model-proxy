@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CANNBot 模型代理</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --card: #161b23;
+    --card-2: #1b222d;
+    --border: #2a3342;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --accent: #6e7bff;
+    --accent-soft: rgba(110, 123, 255, 0.14);
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --radius: 16px;
+  }
+  body.light {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --card-2: #f0f2f8;
+    --border: #dde3ee;
+    --text: #1c2330;
+    --muted: #68748a;
+    --accent-soft: rgba(110, 123, 255, 0.12);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 20px 16px 40px; }
+
+  header.top { display: flex; align-items: center; gap: 10px; padding: 6px 2px 18px; }
+  header.top h1 { font-size: 19px; margin: 0; font-weight: 650; }
+  .spacer { flex: 1; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12.5px; padding: 5px 11px; border-radius: 999px;
+    background: var(--card); border: 1px solid var(--border); color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(63,185,80,.15); }
+  .dot.warn { background: var(--yellow); box-shadow: 0 0 0 3px rgba(210,153,34,.15); }
+  .dot.off { background: var(--red); box-shadow: 0 0 0 3px rgba(248,81,73,.15); }
+  .icon-btn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 10px; padding: 6px 10px; cursor: pointer; font-size: 13px; }
+  .icon-btn:hover { border-color: var(--accent); }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 13px; margin: 0 0 12px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+
+  .kv { display: flex; justify-content: space-between; font-size: 13.5px; padding: 7px 0; border-bottom: 1px dashed var(--border); }
+  .kv:last-child { border-bottom: 0; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-variant-numeric: tabular-nums; }
+
+  .group-title { font-size: 13px; color: var(--muted); margin: 16px 2px 8px; font-weight: 600; }
+  .model {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 13px 14px; margin-bottom: 8px; cursor: pointer;
+    transition: border-color .12s, background .12s;
+  }
+  .model:hover { border-color: var(--accent); }
+  .model.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .model .name { font-size: 14.5px; font-weight: 600; }
+  .model .sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .model .check { margin-left: auto; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border); flex: none; }
+  .model.selected .check { border-color: var(--accent); background: radial-gradient(circle at center, var(--accent) 0 6px, transparent 7px); }
+
+  #logs { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; max-height: 220px; overflow: auto; }
+  .log-row { display: flex; gap: 10px; padding: 5px 2px; border-bottom: 1px dashed var(--border); color: var(--muted); }
+  .log-row .st { width: 40px; flex: none; }
+  .log-row .st.ok { color: var(--green); }
+  .log-row .st.err { color: var(--red); }
+
+  .fld { margin-bottom: 12px; }
+  .fld label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .fld input, .fld textarea {
+    width: 100%; background: var(--card-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none;
+  }
+  .fld textarea { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; resize: vertical; word-break: break-all; }
+  .fld input:focus, .fld textarea:focus { border-color: var(--accent); }
+  .row { display: flex; gap: 8px; }
+  .row input:first-child { flex: 1; }
+  .prov-title { font-size: 13px; color: var(--muted); font-weight: 600; margin: 14px 2px 8px; }
+  .primary {
+    width: 100%; margin-top: 4px; padding: 10px; border: 0; border-radius: 12px;
+    background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .primary:hover { filter: brightness(1.08); }
+
+  .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>CANNBot 模型代理</h1>
+    <span class="pill"><span class="dot" id="status-dot"></span><span id="status-text">连接中…</span></span>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="settings-btn" title="设置：监听地址 / api-key / token">⚙ 设置</button>
+    <button class="icon-btn" id="reload-btn" title="重新加载 config.yaml">↻</button>
+    <button class="icon-btn" id="theme-btn" title="切换明暗主题">◐</button>
+  </header>
+
+  <div class="card" id="settings-card" style="display:none">
+    <h2>设置（保存后写入 config.yaml）</h2>
+    <div class="fld"><label>监听地址（host · port，改了会自动重启监听，面板随之跳转）</label>
+      <div class="row"><input id="set-host" placeholder="127.0.0.1"><input id="set-port" style="width:100px" placeholder="8787"></div>
+    </div>
+    <div class="fld"><label>对外 api-key（留空 = 仅本机免密钥；设置后，Claude Code 的 ANTHROPIC_AUTH_TOKEN 要填同一个值）</label>
+      <input id="set-key" type="password" placeholder="（可选）局域网/多客户端时建议设置">
+    </div>
+    <div id="set-providers"></div>
+    <button class="primary" id="save-btn">保存</button>
+    <div class="foot" id="set-msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>状态</h2>
+    <div class="kv"><span class="k">监听地址</span><span class="v" id="addr">—</span></div>
+    <div class="kv"><span class="k">对外 api-key</span><span class="v" id="apikey">—</span></div>
+    <div class="kv"><span class="k">Token 剩余</span><span class="v" id="token">—</span></div>
+    <div class="kv"><span class="k">当前默认模型</span><span class="v" id="selected-name">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>模型</h2>
+    <div id="models"></div>
+  </div>
+
+  <div class="card">
+    <h2>最近请求</h2>
+    <div id="logs"><div class="foot">暂无</div></div>
+  </div>
+
+  <div class="foot">设置/模型即点即生效 · token 在 ⚙ 里换</div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let STATE = null;
+let SETTINGS = null;
+
+// 所有 /api 请求走这里：带本地保存的 api-key；遇到 401 就地问一次
+async function api(path, opts = {}) {
+  const key = localStorage.getItem('cp_key') || '';
+  const headers = Object.assign({}, opts.headers || {});
+  if (opts.body) headers['content-type'] = 'application/json';
+  if (key) headers['x-api-key'] = key;
+  let r = await fetch(path, Object.assign({}, opts, { headers }));
+  if (r.status === 401) {
+    const k = prompt('这个代理设置了对外 api-key，请输入：');
+    if (k) { localStorage.setItem('cp_key', k); return api(path, opts); }
+  }
+  return r;
+}
+
+async function refreshState() {
+  try {
+    const r = await api('/api/state');
+    if (!r.ok) throw new Error('bad');
+    STATE = await r.json(); render();
+    await fetch('/api/hello', { method: 'HEAD' });
+    setStatus(true);
+  } catch (e) { setStatus(false); }
+}
+function setStatus(ok) {
+  $('#status-dot').className = 'dot ' + (ok ? '' : 'off');
+  $('#status-text').textContent = ok ? '运行中' : '离线';
+}
+function fmtRemain(ms) {
+  if (ms == null) return '—';
+  if (ms <= 0) return '已过期';
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  if (h >= 24) return Math.floor(h / 24) + ' 天 ' + (h % 24) + ' 小时';
+  if (h > 0) return h + ' 小时 ' + m + ' 分';
+  return m + ' 分钟';
+}
+function render() {
+  const s = STATE;
+  $('#addr').textContent = `${s.server.host}:${s.server.port}`;
+  $('#apikey').textContent = s.server.apiKeyConfigured ? '已设置' : '未设置（仅本机）';
+  const t = s.token;
+  $('#token').textContent = t ? fmtRemain(t.remainingMs) : '—';
+  if (t) { $('#status-dot').className = 'dot ' + (t.remainingMs < 3600000 ? 'warn' : ''); }
+  const selName = (s.models.find(m => m.fullId === s.selected) || {}).name || s.selected;
+  $('#selected-name').textContent = selName;
+
+  const byProvider = {};
+  for (const m of s.models) (byProvider[m.providerId] = byProvider[m.providerId] || []).push(m);
+  const el = $('#models'); el.innerHTML = '';
+  for (const [pid, list] of Object.entries(byProvider)) {
+    const pname = (s.providers.find(p => p.id === pid) || {}).displayName || pid;
+    const g = document.createElement('div');
+    g.innerHTML = `<div class="group-title">${pname}</div>`;
+    el.appendChild(g);
+    for (const m of list) {
+      const d = document.createElement('div');
+      d.className = 'model' + (m.fullId === s.selected ? ' selected' : '');
+      d.innerHTML = `<div><div class="name">${m.name}</div><div class="sub">${m.modelId} · ${m.contextWindow ? (m.contextWindow/1024)+'K 上下文' : '—'}</div></div><div class="check"></div>`;
+      d.onclick = () => select(m.fullId);
+      el.appendChild(d);
+    }
+  }
+}
+async function select(fullId) {
+  await api('/api/select', { method: 'POST', body: JSON.stringify({ model: fullId }) });
+  await refreshState();
+}
+async function refreshLogs() {
+  try {
+    const r = await api('/api/logs'); const { logs } = await r.json();
+    const el = $('#logs'); el.innerHTML = '';
+    if (!logs.length) { el.innerHTML = '<div class="foot">暂无</div>'; return; }
+    for (const l of logs) {
+      const d = document.createElement('div'); d.className = 'log-row';
+      const st = l.status === 200 ? 'ok' : (l.status === 'ERR' ? 'err' : '');
+      d.innerHTML = `<span class="st ${st}">${l.status}</span><span>${l.model}</span><span style="margin-left:auto">${l.ms}ms</span>`;
+      el.appendChild(d);
+    }
+  } catch {}
+}
+
+// ---------- 设置 ----------
+async function loadSettings() {
+  const r = await api('/api/settings'); if (!r.ok) return;
+  SETTINGS = await r.json();
+  $('#set-host').value = SETTINGS.server.host;
+  $('#set-port').value = SETTINGS.server.port;
+  $('#set-key').value = SETTINGS.server.apiKey || '';
+  const box = $('#set-providers'); box.innerHTML = '';
+  for (const [pid, p] of Object.entries(SETTINGS.providers)) {
+    const t = document.createElement('div'); t.className = 'prov-title';
+    t.textContent = p.displayName + ' · 鉴权（JWT 每 24 小时过期）';
+    box.appendChild(t);
+    const jwt = document.createElement('div'); jwt.className = 'fld';
+    jwt.innerHTML = `<label>Authorization（JWT，Bearer 前缀可省略；留空 = 保持不变）</label><textarea id="set-jwt-${pid}" rows="3"></textarea>`;
+    box.appendChild(jwt);
+    const vk = document.createElement('div'); vk.className = 'fld';
+    vk.innerHTML = `<label>x-api-vkey（虚拟密钥；留空 = 保持不变）</label><input id="set-vk-${pid}">`;
+    box.appendChild(vk);
+    jwt.querySelector('textarea').value = p.authorization;
+    vk.querySelector('input').value = p.vkey;
+  }
+}
+$('#settings-btn').onclick = () => {
+  const c = $('#settings-card'); const show = c.style.display === 'none';
+  c.style.display = show ? '' : 'none';
+  if (show) loadSettings();
+};
+$('#save-btn').onclick = async () => {
+  const msg = $('#set-msg');
+  if (!SETTINGS) return;
+  const body = {
+    server: {
+      host: $('#set-host').value.trim() || '127.0.0.1',
+      port: $('#set-port').value.trim(),
+      apiKey: $('#set-key').value,
+    },
+    providers: {},
+  };
+  for (const pid of Object.keys(SETTINGS.providers)) {
+    body.providers[pid] = {
+      authorization: document.getElementById('set-jwt-' + pid).value.trim(),
+      vkey: document.getElementById('set-vk-' + pid).value.trim(),
+    };
+  }
+  msg.textContent = '保存中…';
+  const r = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { msg.textContent = j.error || ('保存失败 ' + r.status); return; }
+  // 自己记住刚设的 key，后续请求直接带上
+  if (body.server.apiKey) localStorage.setItem('cp_key', body.server.apiKey);
+  else localStorage.removeItem('cp_key');
+  if (j.moved) {
+    msg.textContent = '已保存，正在跳转到新地址 ' + j.moved.url;
+    setTimeout(() => { location.href = j.moved.url; }, 1400);
+  } else {
+    msg.textContent = '已保存并生效 ✓';
+    setTimeout(() => { msg.textContent = ''; }, 2500);
+    refreshState();
+    loadSettings();
+  }
+};
+
+$('#reload-btn').onclick = async () => { await api('/api/reload', { method: 'POST' }); await refreshState(); };
+$('#theme-btn').onclick = () => document.body.classList.toggle('light');
+
+refreshState(); refreshLogs();
+setInterval(refreshState, 4000);
+setInterval(refreshLogs, 4000);
+</script>
+</body>
+</html>

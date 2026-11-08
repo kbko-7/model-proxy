@@ -1,0 +1,12 @@
+{
+  "name": "cannbot-model-proxy",
+  "version": "0.2.0",
+  "private": true,
+  "description": "CANNBot 模型切换 · 本地桌面应用（Python webview 壳 + Node 代理内核）",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  }
+}
