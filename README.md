@@ -1,6 +1,6 @@
-# CANNBot 模型代理
+# model-proxy
 
-本地桌面应用：托盘常驻 + 原生窗口，把 Claude Code 的请求转发到 CANNBot，并在窗口里自由切换模型。
+本地桌面应用：托盘常驻 + 原生窗口，把 Claude Code / Codex 等客户端的请求转发到你配置的后端模型，并在窗口里自由切换模型。
 
 ## 组成
 
@@ -20,7 +20,7 @@
 
 ## 启动
 
-- **正常用法**：双击桌面「CANNBot 模型代理」快捷方式，或 `start.vbs` —— 无任何控制台窗口
+- **正常用法**：双击桌面「model-proxy」快捷方式，或 `start.vbs` —— 无任何控制台窗口
 - **调试**：双击 `debug.cmd`（有控制台，显示 node 内核日志）
 - 关窗 = 缩到托盘；托盘菜单：打开面板 / 退出
 
@@ -45,7 +45,7 @@ npm install                                  # 内核依赖（yaml）
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
-    "ANTHROPIC_MODEL": "cannbot-proxy"
+    "ANTHROPIC_MODEL": "model-proxy"
   }
 }
 ```
@@ -68,13 +68,13 @@ npm install                                  # 内核依赖（yaml）
 
 - Claude Code → OpenAI 后端：Messages ↔ Chat Completions
 - Codex → 任意后端：Responses ↔ Chat Completions / Messages
-- OpenAI 工具 → CANNBot/Anthropic 后端：Chat Completions ↔ Messages
+- OpenAI 工具 → Anthropic 后端：Chat Completions ↔ Messages
 
 **接 Codex**（`~/.codex/config.toml`）：
 
 ```toml
 [model_providers.cannbot]
-name = "cannbot-proxy"
+name = "model-proxy"
 base_url = "http://127.0.0.1:8787/v1"
 wire_api = "responses"
 
@@ -104,7 +104,7 @@ model_provider = "cannbot"
 
 ## 行为细节
 
-- 收到的请求若未指定可识别的模型（如 `cannbot-proxy`、`claude-sonnet-*` 等），一律用窗口里选中的默认模型
+- 收到的请求若未指定可识别的模型（如 `model-proxy`、`claude-sonnet-*` 等），一律用窗口里选中的默认模型
 - 孤儿保护：桌面壳意外退出时，内核自动退出，不残留占用端口
 - JWT 剩余时间在「状态」卡片实时显示，少于 1 小时变黄提醒
 

@@ -101,7 +101,7 @@ async function main() {
   const anthropic = await startMock('anthropic', anthropicUpstream);
   const openai = await startMock('openai', openaiUpstream);
 
-  const dir = mkdtempSync(join(tmpdir(), 'cannbot-proxy-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'model-proxy-test-'));
   const configPath = join(dir, 'config.yaml');
   const statePath = join(dir, 'state.json');
   writeFileSync(configPath, `server:
@@ -134,7 +134,7 @@ providers:
 
   const proc = spawn(process.execPath, ['server.mjs'], {
     cwd: dirname(fileURLToPath(import.meta.url)),
-    env: { ...process.env, CANNBOT_PROXY_CONFIG: configPath, CANNBOT_PROXY_STATE: statePath },
+    env: { ...process.env, MODEL_PROXY_CONFIG: configPath, MODEL_PROXY_STATE: statePath },
     stdio: ['pipe', 'ignore', 'inherit'],
   });
   proc.stdin.end();
@@ -257,6 +257,16 @@ providers:
       assert.strictEqual(j.providers.cannbot.protocol, 'openai');
       assert.deepStrictEqual(j.providers.cannbot.headers, { 'x-custom': 'hi', Authorization: 'Bearer new' });
       assert.deepStrictEqual(j.providers.cannbot.models, ['deepseek-v4-pro']);
+    });
+
+    // 12) 主题持久化：写入 state.json 并在 GET / 注入主题类
+    await ok('主题持久化（POST /api/theme -> GET / 注入 light）', async () => {
+      const before = await get(P, '/');
+      assert.ok(!before.body.includes('<body class="light">'), '默认暗色');
+      const r = await post(P, '/api/theme', { theme: 'light' });
+      assert.strictEqual(r.status, 200);
+      const after = await get(P, '/');
+      assert.ok(after.body.includes('<body class="light">'), '切换后注入 light');
     });
   } finally {
     proc.kill();

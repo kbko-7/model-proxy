@@ -1,4 +1,4 @@
-# CANNBot 模型代理 · 桌面壳（Python + pywebview + pystray）
+# model-proxy · 桌面壳（Python + pywebview + pystray）
 # 原生窗口用系统 WebView（WebView2/EdgeChromium），托盘用 pystray，内核是 node server.mjs。
 # 重复启动安全：发现内核已在跑就直接开窗口，不再起第二个。
 import os
@@ -59,7 +59,7 @@ def start_proxy():
     kwargs = {"cwd": HERE, "stdin": subprocess.PIPE}
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # 不弹黑窗
-    env = {**os.environ, "CANNBOT_PROXY_PARENT": "1"}  # 内核据此开启孤儿保护
+    env = {**os.environ, "MODEL_PROXY_PARENT": "1"}  # 内核据此开启孤儿保护
     proxy = subprocess.Popen(["node", os.path.join(HERE, "server.mjs")], env=env, **kwargs)
 
 
@@ -125,13 +125,13 @@ def main():
         if not wait_proxy():
             print("代理内核启动失败（node server.mjs）", file=sys.stderr)
 
-    window = webview.create_window("CANNBot 模型代理", URL, width=460, height=780, min_size=(380, 600))
+    window = webview.create_window("model-proxy", URL, width=460, height=780, min_size=(380, 600))
     window.events.closing += on_closing
 
     tray = pystray.Icon(
-        "cannbot-proxy",
+        "model-proxy",
         make_icon(),
-        "CANNBot 模型代理",
+        "model-proxy",
         menu=pystray.Menu(
             # default=True：Windows 下左键单击托盘图标即触发「打开面板」
             pystray.MenuItem("打开面板", show_window, default=True),

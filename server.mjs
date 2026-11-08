@@ -1,7 +1,7 @@
-// CANNBot 模型切换代理 · 内核
+// model-proxy · 内核
 // 纯 Node，零框架（除 yaml 解析）。既可以被 Electron 壳 import，也可以 `node server.mjs` 单独跑。
 // 只做三件事：
-//   1) 接收 Claude Code 的 Anthropic 请求，改写 model，注入鉴权头后转发到 CANNBot
+//   1) 接收 Claude Code 的 Anthropic 请求，改写 model，注入鉴权头后转发到后端
 //   2) 补一个 /v1/models 模型发现接口（Claude Code 的 /model 选择器用）
 //   3) 提供本地控制台页面 + /api/* 控制接口（选模型 / 看日志 / 看 token 状态）
 
@@ -14,8 +14,8 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { buildBackendRequest, buildFrontendResponse, streamToFrontend } from './translate.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = process.env.CANNBOT_PROXY_CONFIG || join(__dirname, 'config.yaml');
-const STATE_PATH = process.env.CANNBOT_PROXY_STATE || join(__dirname, 'state.json');
+const CONFIG_PATH = process.env.MODEL_PROXY_CONFIG || join(__dirname, 'config.yaml');
+const STATE_PATH = process.env.MODEL_PROXY_STATE || join(__dirname, 'state.json');
 const PANEL_PATH = join(__dirname, 'panel.html');
 const ANTHROPIC_VERSION = '2023-06-01';
 // 发现接口别名前缀：Claude Code 只保留 id 里含 "claude"/"anthropic" 的模型，
@@ -38,7 +38,7 @@ function loadState() {
 }
 
 // 由控制台写回 config.yaml 时使用的文件头注释
-const CONFIG_HEADER = '# CANNBot 模型切换代理 · 配置文件\n# 监听地址 / api-key / 各 provider 鉴权都可以在控制台「设置」里改，也可以手改本文件。\n# 注意：本文件含明文密钥，请勿外传。\n\n';
+const CONFIG_HEADER = '# model-proxy · 配置文件\n# 监听地址 / api-key / 各 provider 鉴权都可以在控制台「设置」里改，也可以手改本文件。\n# 注意：本文件含明文密钥，请勿外传。\n\n';
 
 // ---------- 重新监听（设置里改了 host/port 用） ----------
 function relisten() {
@@ -279,7 +279,9 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (path === '/' && req.method === 'GET') {
-      const html = readFileSync(PANEL_PATH, 'utf8');
+      let html = readFileSync(PANEL_PATH, 'utf8');
+      // 主题持久化在 state.json，渲染前注入到 <body>，避免首屏闪烁
+      if (state.theme === 'light') html = html.replace('<body>', '<body class="light">');
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       return res.end(html);
     }
@@ -417,6 +419,12 @@ const server = http.createServer(async (req, res) => {
         writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
         return json(res, 200, { ok: true, selected: b.model });
       }
+      if (path === '/api/theme' && req.method === 'POST') {
+        const b = JSON.parse(await readBody(req));
+        state.theme = b.theme === 'light' ? 'light' : 'dark';
+        writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+        return json(res, 200, { ok: true, theme: state.theme });
+      }
       if (path === '/api/reload' && req.method === 'POST') {
         config = loadConfig();
         state = loadState();
@@ -447,7 +455,7 @@ export function startServer() {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {
-      console.log(`✅ CANNBot 模型代理已启动: http://${host}:${port}`);
+      console.log(`✅ model-proxy已启动: http://${host}:${port}`);
       console.log(`   控制台: http://${host}:${port}/`);
       console.log(`   Claude Code 请把 ANTHROPIC_BASE_URL 指向 http://${host}:${port}`);
       console.log(`   当前默认模型: ${selectedFullId()}`);
@@ -456,9 +464,9 @@ export function startServer() {
   });
 }
 
-// 孤儿保护：桌面壳（app.py）用 stdin 管道 + CANNBOT_PROXY_PARENT=1 拉起本进程；
+// 孤儿保护：桌面壳（app.py）用 stdin 管道 + MODEL_PROXY_PARENT=1 拉起本进程；
 // 壳一退出 stdin 即关闭，本进程自动退出，不会残留占着端口。
-if (process.env.CANNBOT_PROXY_PARENT === '1' && process.stdin) {
+if (process.env.MODEL_PROXY_PARENT === '1' && process.stdin) {
   process.stdin.resume();
   process.stdin.on('close', () => process.exit(0));
   process.stdin.on('end', () => process.exit(0));

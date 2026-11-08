@@ -1,8 +1,8 @@
 {
-  "name": "cannbot-model-proxy",
+  "name": "model-proxy",
   "version": "0.2.0",
   "private": true,
-  "description": "CANNBot 模型切换 · 本地桌面应用（Python webview 壳 + Node 代理内核）",
+  "description": "本地多协议模型代理：Claude Code / Codex / OpenAI 客户端 → 任意 Anthropic·OpenAI 后端",
   "scripts": {
     "start": "node server.mjs"
   },

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CANNBot 模型代理</title>
+<title>model-proxy</title>
 <style>
   :root {
     --bg: #0e1116;
@@ -116,51 +116,72 @@
   .primary:hover { filter: brightness(1.08); }
 
   .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 10px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 4px; }
+  .tab { flex: 1; padding: 8px 0; border: 0; background: transparent; color: var(--muted); border-radius: 9px; font-size: 13.5px; cursor: pointer; font-weight: 500; }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--accent-soft); color: var(--text); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .card-head { display: flex; align-items: center; margin-bottom: 12px; gap: 8px; }
+  .card-head h2 { margin: 0; flex: 1; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header class="top">
-    <h1>CANNBot 模型代理</h1>
+    <h1>model-proxy</h1>
     <span class="pill"><span class="dot" id="status-dot"></span><span id="status-text">连接中…</span></span>
     <div class="spacer"></div>
-    <button class="icon-btn" id="settings-btn" title="设置：监听地址 / api-key / token">⚙ 设置</button>
-    <button class="icon-btn" id="reload-btn" title="重新加载 config.yaml">↻</button>
     <button class="icon-btn" id="theme-btn" title="切换明暗主题">◐</button>
   </header>
 
-  <div class="card" id="settings-card" style="display:none">
-    <h2>设置（保存后写入 config.yaml）</h2>
-    <div class="fld"><label>监听地址（host · port，改了会自动重启监听，面板随之跳转）</label>
-      <div class="row"><input id="set-host" placeholder="127.0.0.1"><input id="set-port" style="width:100px" placeholder="8787"></div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="models">模型</button>
+    <button class="tab" data-tab="logs">日志</button>
+    <button class="tab" data-tab="settings">设置</button>
+  </nav>
+
+  <section class="tab-panel active" id="tab-models">
+    <div class="card">
+      <h2>状态</h2>
+      <div class="kv"><span class="k">监听地址</span><span class="v" id="addr">—</span></div>
+      <div class="kv"><span class="k">对外 api-key</span><span class="v" id="apikey">—</span></div>
+      <div class="kv"><span class="k">Token 剩余</span><span class="v" id="token">—</span></div>
+      <div class="kv"><span class="k">当前默认模型</span><span class="v" id="selected-name">—</span></div>
     </div>
-    <div class="fld"><label>对外 api-key（留空 = 仅本机免密钥；设置后，Claude Code 的 ANTHROPIC_AUTH_TOKEN 要填同一个值）</label>
-      <input id="set-key" type="password" placeholder="（可选）局域网/多客户端时建议设置">
+    <div class="card">
+      <h2>模型</h2>
+      <div id="models"></div>
     </div>
-    <div id="set-providers"></div>
-    <button class="primary" id="save-btn">保存</button>
-    <div class="foot" id="set-msg"></div>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>状态</h2>
-    <div class="kv"><span class="k">监听地址</span><span class="v" id="addr">—</span></div>
-    <div class="kv"><span class="k">对外 api-key</span><span class="v" id="apikey">—</span></div>
-    <div class="kv"><span class="k">Token 剩余</span><span class="v" id="token">—</span></div>
-    <div class="kv"><span class="k">当前默认模型</span><span class="v" id="selected-name">—</span></div>
-  </div>
+  <section class="tab-panel" id="tab-logs">
+    <div class="card">
+      <h2>最近请求</h2>
+      <div id="logs"><div class="foot">暂无</div></div>
+    </div>
+  </section>
 
-  <div class="card">
-    <h2>模型</h2>
-    <div id="models"></div>
-  </div>
+  <section class="tab-panel" id="tab-settings">
+    <div class="card">
+      <div class="card-head">
+        <h2>设置（保存后写入 config.yaml）</h2>
+        <button class="icon-btn" id="reload-btn" title="重新加载 config.yaml">↻ 重新加载</button>
+      </div>
+      <div class="fld"><label>监听地址（host · port，改了会自动重启监听，面板随之跳转）</label>
+        <div class="row"><input id="set-host" placeholder="127.0.0.1"><input id="set-port" style="width:100px" placeholder="8787"></div>
+      </div>
+      <div class="fld"><label>对外 api-key（留空 = 仅本机免密钥；设置后，Claude Code 的 ANTHROPIC_AUTH_TOKEN 要填同一个值）</label>
+        <input id="set-key" type="password" placeholder="（可选）局域网/多客户端时建议设置">
+      </div>
+      <div id="set-providers"></div>
+      <button class="primary" id="save-btn">保存</button>
+      <div class="foot" id="set-msg"></div>
+    </div>
+  </section>
 
-  <div class="card">
-    <h2>最近请求</h2>
-    <div id="logs"><div class="foot">暂无</div></div>
-  </div>
-
-  <div class="foot">设置/模型即点即生效 · token 在 ⚙ 里换</div>
+  <div class="foot">模型即点即生效 · token 在「设置」里换</div>
 </div>
 
 <script>
@@ -311,11 +332,15 @@ document.addEventListener('click', (e) => {
   }
 });
 
-$('#settings-btn').onclick = () => {
-  const c = $('#settings-card'); const show = c.style.display === 'none';
-  c.style.display = show ? '' : 'none';
-  if (show) loadSettings();
-};
+// ---------- 页签切换 ----------
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === 'tab-' + name));
+  if (name === 'settings') loadSettings();
+}
+document.querySelectorAll('.tab').forEach((t) => {
+  t.onclick = () => switchTab(t.dataset.tab);
+});
 $('#save-btn').onclick = async () => {
   const msg = $('#set-msg');
   if (!SETTINGS) return;
@@ -360,8 +385,11 @@ $('#save-btn').onclick = async () => {
   }
 };
 
-$('#reload-btn').onclick = async () => { await api('/api/reload', { method: 'POST' }); await refreshState(); };
-$('#theme-btn').onclick = () => document.body.classList.toggle('light');
+$('#reload-btn').onclick = async () => { await api('/api/reload', { method: 'POST' }); await refreshState(); loadSettings(); };
+$('#theme-btn').onclick = () => {
+  const light = document.body.classList.toggle('light');
+  api('/api/theme', { method: 'POST', body: JSON.stringify({ theme: light ? 'light' : 'dark' }) }).catch(() => {});
+};
 
 refreshState(); refreshLogs();
 setInterval(refreshState, 4000);

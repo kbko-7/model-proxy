@@ -1,4 +1,4 @@
-# CANNBot 模型切换代理 · 配置文件（示例）
+# model-proxy · 配置文件（示例）
 # 复制本文件为 config.yaml，并填入你自己的鉴权信息。
 # 注意：config.yaml 含明文密钥，已被 .gitignore 排除，请勿提交真实文件。
 #
