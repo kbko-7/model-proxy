@@ -122,6 +122,39 @@ function setAutostart(enabled) {
   });
 }
 
+// ---------- 静默启动 ----------
+// 桌面壳（app.py）启动时据此决定是否隐藏窗口（只进托盘，不弹面板）。
+function getSilentStart() {
+  return !!config.server?.silentStart;
+}
+function setSilentStart(enabled) {
+  config.server = { ...(config.server || {}), silentStart: !!enabled };
+  writeFileSync(CONFIG_PATH, CONFIG_HEADER + stringifyYaml(config), 'utf8');
+  return { ok: true, enabled: !!enabled };
+}
+
+// ---------- provider / 模型管理（不再手改 config.yaml） ----------
+function writeConfig() {
+  writeFileSync(CONFIG_PATH, CONFIG_HEADER + stringifyYaml(config), 'utf8');
+}
+function writeState() {
+  writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+}
+// 删除 provider 或模型后清掉指向它的选中/路由引用，避免悬挂。返回是否动了 state.json。
+function clearModelRef(ref) {
+  const isProvider = !String(ref).includes('/');
+  const hit = (fullId) => fullId && (isProvider ? fullId.startsWith(ref + '/') : fullId === ref);
+  let dirty = false;
+  if (hit(state.selectedModel)) { delete state.selectedModel; dirty = true; }
+  if (hit(config.server?.selectedModel)) delete config.server.selectedModel;
+  const r = config.server?.routing;
+  if (r) {
+    if (hit(r.subagentModel)) { delete r.subagentModel; dirty = true; }
+    if (hit(r.auxiliaryModel)) { delete r.auxiliaryModel; dirty = true; }
+  }
+  return dirty;
+}
+
 // ---------- 模型解析 ----------
 function allProviders() {
   return Object.entries(config.providers || {});
@@ -742,6 +775,78 @@ const server = http.createServer(async (req, res) => {
         const b = JSON.parse(await readBody(req));
         const r = await setAutostart(!!b.enabled);
         return json(res, r.ok ? 200 : 500, r);
+      }
+      if (path === '/api/silentstart' && req.method === 'GET') {
+        return json(res, 200, { enabled: getSilentStart() });
+      }
+      if (path === '/api/silentstart' && req.method === 'POST') {
+        const b = JSON.parse(await readBody(req));
+        return json(res, 200, setSilentStart(!!b.enabled));
+      }
+      if (path === '/api/providers' && req.method === 'POST') {
+        const b = JSON.parse(await readBody(req));
+        const id = String(b.id || '').trim();
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(id)) return json(res, 400, { error: 'provider id 只能含字母/数字/下划线/连字符，且以字母或数字开头' });
+        if (config.providers?.[id]) return json(res, 400, { error: `provider ${id} 已存在` });
+        const protocol = String(b.protocol || 'anthropic').toLowerCase();
+        if (protocol !== 'anthropic' && protocol !== 'openai') return json(res, 400, { error: '协议必须是 anthropic 或 openai' });
+        const headers = {};
+        if (b.headers && typeof b.headers === 'object') {
+          for (const [k, v] of Object.entries(b.headers)) {
+            const key = String(k).trim();
+            if (key) headers[key] = String(v ?? '');
+          }
+        }
+        const models = [];
+        if (Array.isArray(b.models)) {
+          for (const m of b.models) {
+            const mid = String(m?.id || '').trim();
+            if (mid) models.push({ id: mid, name: String(m.name || mid).trim() || mid, contextWindow: Number(m.contextWindow) || 0 });
+          }
+        }
+        config.providers = { ...(config.providers || {}), [id]: {
+          displayName: String(b.displayName || id).trim() || id,
+          protocol,
+          baseURL: String(b.baseURL || '').trim(),
+          headers,
+          models,
+        } };
+        try { writeConfig(); } catch (e) { return json(res, 500, { error: '写 config.yaml 失败: ' + e.message }); }
+        return json(res, 200, { ok: true, id });
+      }
+      if (path === '/api/providers/delete' && req.method === 'POST') {
+        const b = JSON.parse(await readBody(req));
+        const id = String(b.id || '').trim();
+        if (!config.providers?.[id]) return json(res, 400, { error: `provider ${id} 不存在` });
+        delete config.providers[id];
+        const stateDirty = clearModelRef(id);
+        try { writeConfig(); if (stateDirty) writeState(); } catch (e) { return json(res, 500, { error: '写文件失败: ' + e.message }); }
+        return json(res, 200, { ok: true });
+      }
+      if (path === '/api/providers/models' && req.method === 'POST') {
+        const b = JSON.parse(await readBody(req));
+        const p = config.providers?.[String(b.provider || '').trim()];
+        if (!p) return json(res, 400, { error: `未知 provider: ${b.provider}` });
+        const mid = String(b.id || '').trim();
+        if (!mid) return json(res, 400, { error: '模型 id 不能为空' });
+        p.models = p.models || [];
+        if (p.models.some((m) => m.id === mid)) return json(res, 400, { error: `模型 ${mid} 已存在` });
+        p.models.push({ id: mid, name: String(b.name || mid).trim() || mid, contextWindow: Number(b.contextWindow) || 0 });
+        try { writeConfig(); } catch (e) { return json(res, 500, { error: '写 config.yaml 失败: ' + e.message }); }
+        return json(res, 200, { ok: true, models: p.models.map((m) => m.id) });
+      }
+      if (path === '/api/providers/models/delete' && req.method === 'POST') {
+        const b = JSON.parse(await readBody(req));
+        const pid = String(b.provider || '').trim();
+        const p = config.providers?.[pid];
+        if (!p) return json(res, 400, { error: `未知 provider: ${b.provider}` });
+        const mid = String(b.id || '').trim();
+        const before = (p.models || []).length;
+        p.models = (p.models || []).filter((m) => m.id !== mid);
+        if (p.models.length === before) return json(res, 400, { error: `模型 ${mid} 不存在` });
+        const stateDirty = clearModelRef(`${pid}/${mid}`);
+        try { writeConfig(); if (stateDirty) writeState(); } catch (e) { return json(res, 500, { error: '写文件失败: ' + e.message }); }
+        return json(res, 200, { ok: true });
       }
       if (path === '/api/reload' && req.method === 'POST') {
         config = loadConfig();

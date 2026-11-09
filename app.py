@@ -36,7 +36,21 @@ def read_addr():
     return host, port
 
 
+def read_silent():
+    """从 config.yaml 读 silentStart（静默启动：开机后只进托盘、不弹窗口）"""
+    try:
+        with open(os.path.join(HERE, "config.yaml"), encoding="utf-8") as f:
+            text = f.read()
+        m = re.search(r"^\s*silentStart:\s*(true|false)", text, re.M)
+        if m:
+            return m.group(1).lower() == "true"
+    except Exception:
+        pass
+    return False
+
+
 HOST, PORT = read_addr()
+SILENT = read_silent()
 URL = f"http://{HOST}:{PORT}/"
 
 proxy = None
@@ -129,7 +143,7 @@ def main():
         if not wait_proxy():
             print("代理内核启动失败（node server.mjs）", file=sys.stderr)
 
-    window = webview.create_window("model-proxy", URL, width=460, height=780, min_size=(380, 600))
+    window = webview.create_window("model-proxy", URL, width=460, height=780, min_size=(380, 600), hidden=SILENT)
     window.events.closing += on_closing
 
     tray = pystray.Icon(

@@ -120,8 +120,21 @@
   .hdr-hint { font-size: 11px; margin: 3px 0 0 2px; }
   .hdr-add { border: 1px dashed var(--border); background: transparent; color: var(--muted); border-radius: 8px; padding: 5px 12px; cursor: pointer; font-size: 12.5px; }
   .hdr-add:hover { color: var(--accent); border-color: var(--accent); }
-  .prov-models { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; }
-  .prov-models .hint { opacity: .7; }
+  .prov-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .prov-head .prov-title { margin: 0; }
+  .prov-del { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 12px; flex: none; }
+  .prov-del:hover { color: var(--red); border-color: var(--red); }
+  .models-wrap { margin-bottom: 10px; }
+  .models-wrap > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .m-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+  .m-info { font-size: 12.5px; min-width: 0; word-break: break-all; }
+  .m-info .m-name { color: var(--text); }
+  .m-info .m-id { color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
+  .m-del { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 7px; width: 24px; height: 24px; cursor: pointer; flex: none; line-height: 1; }
+  .m-del:hover { color: var(--red); border-color: var(--red); }
+  .m-add-form, .prov-add-form { margin-top: 8px; padding: 10px; background: var(--card); border: 1px dashed var(--border); border-radius: 10px; }
+  .m-add-form input, .prov-add-form input, .prov-add-form select { background: var(--card-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 7px 9px; font-size: 12.5px; font-family: inherit; outline: none; min-width: 0; width: 100%; }
+  .m-add-form input:focus, .prov-add-form input:focus, .prov-add-form select:focus { border-color: var(--accent); }
   .disc-box { margin-top: 8px; }
   .disc-item { display: block; font-size: 13px; margin: 5px 0; color: var(--text); }
   .disc-item input { width: auto; margin-right: 7px; }
@@ -234,6 +247,16 @@
           <span class="slider"></span>
         </label>
       </div>
+      <div class="switch-row">
+        <div>
+          <div class="switch-label">静默启动</div>
+          <div class="switch-sub">启动后最小化到托盘，不弹面板（配合开机自启）</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="silent-start">
+          <span class="slider"></span>
+        </label>
+      </div>
       <div class="switch-row" style="margin-bottom:0">
         <div>
           <div class="switch-label">浅色主题</div>
@@ -279,6 +302,18 @@
         </div>
       </div>
       <div id="set-providers"></div>
+      <button class="hdr-add" id="add-prov-btn" type="button" style="margin-top:4px">+ 新增 provider</button>
+      <div class="prov-add-form" id="prov-add-form" style="display:none">
+        <div class="fld"><label>provider id（必填）</label><input id="np-id" placeholder="字母/数字/下划线/连字符，如 openai"></div>
+        <div class="fld"><label>显示名</label><input id="np-name" placeholder="可省，默认用 id"></div>
+        <div class="row">
+          <div class="fld" style="flex:1"><label>协议</label>
+            <select id="np-protocol"><option value="anthropic">anthropic</option><option value="openai">openai</option></select>
+          </div>
+          <div class="fld" style="flex:2"><label>baseURL</label><input id="np-baseurl" placeholder="https://api.openai.com/v1"></div>
+        </div>
+        <button class="primary" id="np-create" type="button" style="margin-top:0">创建 provider</button>
+      </div>
     </div>
     <div class="save-bar">
       <button class="primary" id="save-btn">保存全部设置</button>
@@ -525,9 +560,11 @@ async function loadSettings() {
   const box = $('#set-providers'); box.innerHTML = '';
   for (const [pid, p] of Object.entries(SETTINGS.providers)) {
     const card = document.createElement('div'); card.className = 'prov'; card.dataset.pid = pid;
-    const models = (p.models || []).map(escapeHtml).join('、') || '（无）';
     card.innerHTML = `
-      <div class="prov-title"><span class="prov-id">${escapeHtml(pid)}</span> · ${escapeHtml(p.protocol)}</div>
+      <div class="prov-head">
+        <div class="prov-title"><span class="prov-id">${escapeHtml(pid)}</span> · ${escapeHtml(p.protocol)}</div>
+        <button class="prov-del" type="button" data-pid="${escapeHtml(pid)}" title="删除该 provider">删除</button>
+      </div>
       <div class="fld"><label>显示名</label><input class="prov-name" value="${escapeHtml(p.displayName)}"></div>
       <div class="row">
         <div class="fld" style="flex:1"><label>协议</label>
@@ -543,7 +580,21 @@ async function loadSettings() {
         <div class="hdrs"></div>
         <button class="hdr-add" type="button">+ 加 header</button>
       </div>
-      <div class="prov-models">模型：${models} <span class="hint">（⟳ 可从后端自动发现）</span></div>
+      <div class="models-wrap">
+        <label>模型</label>
+        <div class="models"></div>
+        <button class="hdr-add m-add-btn" type="button" data-pid="${escapeHtml(pid)}">+ 加模型</button>
+        <div class="m-add-form" style="display:none">
+          <div class="row">
+            <input class="m-id" placeholder="模型 id（必填）">
+            <input class="m-name" placeholder="显示名（可省）" style="width:130px">
+          </div>
+          <div class="row" style="margin-top:6px">
+            <input class="m-ctx" placeholder="上下文窗口（可省）">
+            <button class="icon-btn m-add-ok" type="button" data-pid="${escapeHtml(pid)}">添加</button>
+          </div>
+        </div>
+      </div>
       <div class="fld" style="margin-top:10px">
         <button class="hdr-add disc-btn" type="button" data-pid="${escapeHtml(pid)}">⟳ 从后端发现模型</button>
       </div>
@@ -554,8 +605,25 @@ async function loadSettings() {
     if (entries.length) for (const [k, v] of entries) hdrs.appendChild(makeHeaderRow(k, v));
     else hdrs.appendChild(makeHeaderRow('', ''));
     box.appendChild(card);
+    renderProviderModels(card, pid);
   }
   SETTINGS_DIRTY = false;
+}
+
+function ctxText(n) {
+  n = Number(n) || 0;
+  return n ? (n / 1024) + 'K' : '—';
+}
+function renderProviderModels(card, pid) {
+  const box = card.querySelector('.models');
+  box.innerHTML = '';
+  const list = (STATE?.models || []).filter((m) => m.providerId === pid);
+  if (!list.length) { box.innerHTML = '<div class="foot" style="margin:2px 0 6px;text-align:left">暂无模型</div>'; return; }
+  for (const m of list) {
+    const d = document.createElement('div'); d.className = 'm-row';
+    d.innerHTML = `<span class="m-info"><span class="m-name">${escapeHtml(m.name)}</span> <span class="m-id">${escapeHtml(m.modelId)}</span> · ${ctxText(m.contextWindow)} 上下文</span><button class="m-del" type="button" data-provider="${escapeHtml(pid)}" data-id="${escapeHtml(m.modelId)}" title="删除模型">×</button>`;
+    box.appendChild(d);
+  }
 }
 
 // ---------- 开机自启 ----------
@@ -581,15 +649,32 @@ $('#autostart').addEventListener('change', async (e) => {
   }
 });
 
-// 常规卡片：主题 + 开机自启状态
+// 常规卡片：主题 + 开机自启 + 静默启动状态
 function loadGeneral() {
   $('#theme-switch').checked = document.body.classList.contains('light');
   loadAutostart();
+  loadSilentStart();
 }
 $('#theme-switch').addEventListener('change', (e) => {
   const light = e.target.checked;
   document.body.classList.toggle('light', light);
   api('/api/theme', { method: 'POST', body: JSON.stringify({ theme: light ? 'light' : 'dark' }) }).catch(() => {});
+});
+async function loadSilentStart() {
+  try {
+    const r = await api('/api/silentstart'); if (!r.ok) return;
+    const j = await r.json();
+    $('#silent-start').checked = !!j.enabled;
+  } catch {}
+}
+$('#silent-start').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  const r = await api('/api/silentstart', { method: 'POST', body: JSON.stringify({ enabled: on }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) {
+    e.target.checked = !on;
+    showToast('设置静默启动失败', 'err');
+  }
 });
 $('#set-key-clear').addEventListener('click', () => {
   $('#set-key').value = '';
@@ -657,6 +742,82 @@ document.addEventListener('click', async (e) => {
       await refreshState();
       loadSettings();
     }
+  }
+});
+
+// ---------- provider / 模型增删 ----------
+async function reloadAfterProviderChange() {
+  await refreshState();
+  await loadSettings();
+  loadGeneral();
+}
+document.addEventListener('click', async (e) => {
+  const pd = e.target.closest('.prov-del');
+  if (pd) {
+    const pid = pd.dataset.pid;
+    if (!confirm(`确定删除 provider「${pid}」及其所有模型吗？`)) return;
+    const r = await api('/api/providers/delete', { method: 'POST', body: JSON.stringify({ id: pid }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast(j.error || '删除失败', 'err'); return; }
+    showToast('已删除 provider「' + pid + '」', 'ok');
+    reloadAfterProviderChange();
+    return;
+  }
+  const md = e.target.closest('.m-del');
+  if (md) {
+    const { provider, id } = md.dataset;
+    if (!confirm(`确定删除模型「${id}」吗？`)) return;
+    const r = await api('/api/providers/models/delete', { method: 'POST', body: JSON.stringify({ provider, id }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast(j.error || '删除失败', 'err'); return; }
+    showToast('已删除模型「' + id + '」', 'ok');
+    reloadAfterProviderChange();
+    return;
+  }
+  const mab = e.target.closest('.m-add-btn');
+  if (mab) {
+    const form = mab.parentElement.querySelector('.m-add-form');
+    form.style.display = form.style.display === 'none' ? '' : 'none';
+    return;
+  }
+  const mao = e.target.closest('.m-add-ok');
+  if (mao) {
+    const pid = mao.dataset.pid;
+    const wrap = mao.closest('.models-wrap');
+    const id = wrap.querySelector('.m-id').value.trim();
+    if (!id) { showToast('模型 id 不能为空', 'err'); return; }
+    const name = wrap.querySelector('.m-name').value.trim();
+    const ctx = wrap.querySelector('.m-ctx').value.trim();
+    const r = await api('/api/providers/models', { method: 'POST', body: JSON.stringify({ provider: pid, id, name, contextWindow: Number(ctx) || 0 }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast(j.error || '添加失败', 'err'); return; }
+    showToast('已添加模型「' + id + '」', 'ok');
+    reloadAfterProviderChange();
+    return;
+  }
+  if (e.target.closest('#add-prov-btn')) {
+    const form = $('#prov-add-form');
+    form.style.display = form.style.display === 'none' ? '' : 'none';
+    return;
+  }
+  if (e.target.closest('#np-create')) {
+    const id = $('#np-id').value.trim();
+    if (!id) { showToast('provider id 不能为空', 'err'); return; }
+    const r = await api('/api/providers', { method: 'POST', body: JSON.stringify({
+      id,
+      displayName: $('#np-name').value.trim(),
+      protocol: $('#np-protocol').value,
+      baseURL: $('#np-baseurl').value.trim(),
+      headers: {},
+      models: [],
+    }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast(j.error || '创建失败', 'err'); return; }
+    showToast('已创建 provider「' + id + '」，记得填鉴权头', 'ok');
+    $('#np-id').value = ''; $('#np-name').value = ''; $('#np-baseurl').value = '';
+    $('#prov-add-form').style.display = 'none';
+    reloadAfterProviderChange();
+    return;
   }
 });
 
@@ -728,10 +889,11 @@ $('#save-btn').onclick = async () => {
 
 $('#reload-btn').onclick = async () => { await api('/api/reload', { method: 'POST' }); await refreshState(); loadSettings(); loadGeneral(); };
 
-// 任何设置表单输入都标记为「有未保存改动」（开机自启/主题开关即时生效，不算）
+// 任何设置表单输入都标记为「有未保存改动」（常规开关/增删表单即时生效，不算）
 document.addEventListener('input', (e) => {
   const t = e.target;
-  if (t.id === 'autostart' || t.id === 'theme-switch') return;
+  if (t.id === 'autostart' || t.id === 'theme-switch' || t.id === 'silent-start') return;
+  if (t.closest && t.closest('.m-add-form, .prov-add-form')) return;
   if (t.closest && t.closest('#tab-settings')) SETTINGS_DIRTY = true;
 });
 
