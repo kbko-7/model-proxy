@@ -107,13 +107,17 @@
   .prov-id { font-family: ui-monospace, Consolas, monospace; color: var(--accent); }
   .hdrs-wrap { margin-bottom: 10px; }
   .hdrs-wrap > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
-  .hdr-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+  .hdr-item { margin-bottom: 6px; }
+  .hdr-row { display: flex; gap: 6px; align-items: center; }
   .hdr-row input { background: var(--card-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none; min-width: 0; }
   .hdr-row input:focus { border-color: var(--accent); }
   .hdr-row .hdr-k { flex: 1; }
   .hdr-row .hdr-v { flex: 1.6; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
   .hdr-del { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 8px; width: 30px; height: 34px; cursor: pointer; flex: none; }
   .hdr-del:hover { color: var(--red); border-color: var(--red); }
+  .hdr-eye { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 8px; width: 34px; height: 34px; cursor: pointer; flex: none; font-size: 13px; }
+  .hdr-eye:hover { color: var(--accent); border-color: var(--accent); }
+  .hdr-hint { font-size: 11px; margin: 3px 0 0 2px; }
   .hdr-add { border: 1px dashed var(--border); background: transparent; color: var(--muted); border-radius: 8px; padding: 5px 12px; cursor: pointer; font-size: 12.5px; }
   .hdr-add:hover { color: var(--accent); border-color: var(--accent); }
   .prov-models { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; }
@@ -127,6 +131,29 @@
     background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
   }
   .primary:hover { filter: brightness(1.08); }
+
+  /* 开关（FlClash 风格） */
+  .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .switch-label { font-size: 14px; font-weight: 600; }
+  .switch-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .switch { position: relative; display: inline-block; width: 44px; height: 26px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider { position: absolute; inset: 0; background: var(--border); border-radius: 999px; cursor: pointer; transition: background .15s; }
+  .switch .slider::before { content: ""; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .15s; }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(18px); }
+  .switch input:disabled + .slider { opacity: .4; cursor: not-allowed; }
+
+  /* 保存栏 + 提示 */
+  .save-bar { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0 6px; margin-top: 2px; z-index: 5; }
+  .save-bar .primary { margin-top: 0; }
+  .save-hint { text-align: center; color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+
+  /* 轻提示 */
+  .toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(8px); background: var(--card-2); border: 1px solid var(--border); color: var(--text); padding: 10px 16px; border-radius: 12px; font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.35); z-index: 100; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: 82%; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.ok { border-color: var(--green); }
+  .toast.err { border-color: var(--red); }
 
   .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 10px; }
 
@@ -145,8 +172,6 @@
   <header class="top">
     <h1>model-proxy</h1>
     <span class="pill"><span class="dot" id="status-dot"></span><span id="status-text">连接中…</span></span>
-    <div class="spacer"></div>
-    <button class="icon-btn" id="theme-btn" title="切换明暗主题">◐</button>
   </header>
 
   <nav class="tabs">
@@ -198,29 +223,66 @@
 
   <section class="tab-panel" id="tab-settings">
     <div class="card">
+      <h2>常规</h2>
+      <div class="switch-row">
+        <div>
+          <div class="switch-label">开机自启</div>
+          <div class="switch-sub" id="autostart-sub">登录 Windows 后自动启动（写入当前用户 Run 注册表项）</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="autostart">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="switch-row" style="margin-bottom:0">
+        <div>
+          <div class="switch-label">浅色主题</div>
+          <div class="switch-sub">切换明暗外观</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="theme-switch">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="card">
       <div class="card-head">
         <h2>智能路由</h2>
         <span class="pill" id="route-hint">提示头：未检测到</span>
       </div>
-      <div class="fld"><label><input type="checkbox" id="route-enabled"> 启用：子代理 / 后台任务自动分流到便宜模型</label></div>
+      <div class="switch-row">
+        <div>
+          <div class="switch-label">启用智能路由</div>
+          <div class="switch-sub">子代理 / 后台任务自动分流到便宜模型</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="route-enabled">
+          <span class="slider"></span>
+        </label>
+      </div>
       <div class="fld"><label>子代理模型（subagent / workflow）</label><select id="route-subagent"></select></div>
       <div class="fld"><label>后台任务模型（auxiliary / compaction）</label><select id="route-auxiliary"></select></div>
       <div class="foot">主对话始终用面板默认模型；显式 /model 选择优先于路由。<br>需要 Claude Code 开启 CLAUDE_CODE_GATEWAY_HINT_HEADERS=1</div>
     </div>
     <div class="card">
       <div class="card-head">
-        <h2>设置（保存后写入 config.yaml）</h2>
+        <h2>服务器与 Providers</h2>
         <button class="icon-btn" id="reload-btn" title="重新加载 config.yaml">↻ 重新加载</button>
       </div>
       <div class="fld"><label>监听地址（host · port，改了会自动重启监听，面板随之跳转）</label>
         <div class="row"><input id="set-host" placeholder="127.0.0.1"><input id="set-port" style="width:100px" placeholder="8787"></div>
       </div>
       <div class="fld"><label>对外 api-key（留空 = 仅本机免密钥；设置后，Claude Code 的 ANTHROPIC_AUTH_TOKEN 要填同一个值）</label>
-        <input id="set-key" type="password" placeholder="（可选）局域网/多客户端时建议设置">
+        <div class="row">
+          <input id="set-key" type="password" placeholder="（可选）局域网/多客户端时建议设置">
+          <button class="icon-btn" id="set-key-clear" type="button" style="display:none" title="清除已设置的 api-key">清除</button>
+        </div>
       </div>
       <div id="set-providers"></div>
-      <button class="primary" id="save-btn">保存</button>
-      <div class="foot" id="set-msg"></div>
+    </div>
+    <div class="save-bar">
+      <button class="primary" id="save-btn">保存全部设置</button>
+      <div class="save-hint">写入 config.yaml · 主机/端口/密钥/路由/全部 provider 一并保存</div>
     </div>
   </section>
 
@@ -231,6 +293,18 @@
 const $ = (s) => document.querySelector(s);
 let STATE = null;
 let SETTINGS = null;
+let SETTINGS_DIRTY = false;
+let currentTab = 'models';
+
+let toastTimer = null;
+function showToast(msg, type = '') {
+  let el = document.querySelector('.toast');
+  if (!el) { el = document.createElement('div'); el.className = 'toast'; document.body.appendChild(el); }
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2800);
+}
 
 // 所有 /api 请求走这里：带本地保存的 api-key；遇到 401 就地问一次
 async function api(path, opts = {}) {
@@ -380,13 +454,44 @@ async function refreshLogs() {
 }
 
 // ---------- 设置 ----------
+function jwtRemaining(headerValue) {
+  const m = String(headerValue || '').match(/Bearer\s+([A-Za-z0-9\-_.]+)/);
+  if (!m) return null;
+  try {
+    const payload = JSON.parse(atob(m[1].split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    if (!payload.exp) return null;
+    return payload.exp * 1000 - Date.now();
+  } catch { return null; }
+}
+
 function makeHeaderRow(k, v) {
+  const item = document.createElement('div'); item.className = 'hdr-item';
   const row = document.createElement('div'); row.className = 'hdr-row';
   const ki = document.createElement('input'); ki.className = 'hdr-k'; ki.placeholder = 'Header 名（如 Authorization）'; ki.value = k || '';
-  const vi = document.createElement('input'); vi.className = 'hdr-v'; vi.placeholder = '值'; vi.value = v || '';
+  const vi = document.createElement('input'); vi.className = 'hdr-v'; vi.type = 'password'; vi.placeholder = '值'; vi.value = v || '';
+  const eye = document.createElement('button'); eye.className = 'hdr-eye'; eye.type = 'button'; eye.textContent = '👁'; eye.title = '显示 / 隐藏';
   const del = document.createElement('button'); del.className = 'hdr-del'; del.type = 'button'; del.textContent = '×'; del.title = '删除';
-  row.append(ki, vi, del);
-  return row;
+  row.append(ki, vi, eye, del);
+  const hint = document.createElement('div'); hint.className = 'hdr-hint'; hint.style.display = 'none';
+  item.append(row, hint);
+
+  function refreshHint() {
+    if (ki.value.trim().toLowerCase() === 'authorization') {
+      const rem = jwtRemaining(vi.value);
+      if (rem != null) {
+        hint.textContent = 'JWT 剩余 ' + fmtRemain(rem);
+        hint.style.color = rem < 3600000 ? 'var(--yellow)' : 'var(--green)';
+        hint.style.display = '';
+        return;
+      }
+    }
+    hint.style.display = 'none';
+  }
+  ki.addEventListener('input', refreshHint);
+  vi.addEventListener('input', refreshHint);
+  eye.addEventListener('click', () => { vi.type = vi.type === 'password' ? 'text' : 'password'; });
+  refreshHint();
+  return item;
 }
 
 function fillRoutingSelect(sel, value) {
@@ -406,7 +511,12 @@ async function loadSettings() {
   SETTINGS = await r.json();
   $('#set-host').value = SETTINGS.server.host;
   $('#set-port').value = SETTINGS.server.port;
-  $('#set-key').value = SETTINGS.server.apiKey || '';
+  // api-key 不回填明文：占位符提示是否已设置；留空保存 = 保持不变
+  const hasKey = !!SETTINGS.server.apiKey;
+  $('#set-key').value = '';
+  delete $('#set-key').dataset.clear;
+  $('#set-key').placeholder = hasKey ? '已设置（留空保持不变）' : '（可选）局域网/多客户端时建议设置';
+  $('#set-key-clear').style.display = hasKey ? '' : 'none';
   if (!STATE) await refreshState();
   const rt = SETTINGS.routing || {};
   $('#route-enabled').checked = !!rt.enabled;
@@ -445,7 +555,49 @@ async function loadSettings() {
     else hdrs.appendChild(makeHeaderRow('', ''));
     box.appendChild(card);
   }
+  SETTINGS_DIRTY = false;
 }
+
+// ---------- 开机自启 ----------
+async function loadAutostart() {
+  try {
+    const r = await api('/api/autostart'); if (!r.ok) return;
+    const j = await r.json();
+    const box = $('#autostart');
+    box.checked = !!j.enabled;
+    if (j.unsupported) {
+      box.disabled = true;
+      $('#autostart-sub').textContent = '仅支持 Windows';
+    }
+  } catch {}
+}
+$('#autostart').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  const r = await api('/api/autostart', { method: 'POST', body: JSON.stringify({ enabled: on }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) {
+    e.target.checked = !on; // 失败回滚开关
+    alert('设置开机自启失败：' + (j.error || ('HTTP ' + r.status)));
+  }
+});
+
+// 常规卡片：主题 + 开机自启状态
+function loadGeneral() {
+  $('#theme-switch').checked = document.body.classList.contains('light');
+  loadAutostart();
+}
+$('#theme-switch').addEventListener('change', (e) => {
+  const light = e.target.checked;
+  document.body.classList.toggle('light', light);
+  api('/api/theme', { method: 'POST', body: JSON.stringify({ theme: light ? 'light' : 'dark' }) }).catch(() => {});
+});
+$('#set-key-clear').addEventListener('click', () => {
+  $('#set-key').value = '';
+  $('#set-key').dataset.clear = '1';
+  $('#set-key').placeholder = '（可选）局域网/多客户端时建议设置';
+  $('#set-key-clear').style.display = 'none';
+  SETTINGS_DIRTY = true;
+});
 
 // 事件委托：增删 header 行
 document.addEventListener('click', (e) => {
@@ -453,10 +605,18 @@ document.addEventListener('click', (e) => {
     const wrap = e.target.closest('.hdrs-wrap');
     if (wrap) wrap.querySelector('.hdrs').appendChild(makeHeaderRow('', ''));
   } else if (e.target.closest('.hdr-del')) {
-    const row = e.target.closest('.hdr-row');
-    const hdrs = row.parentElement;
-    if (hdrs.querySelectorAll('.hdr-row').length > 1) row.remove();
-    else { row.querySelector('.hdr-k').value = ''; row.querySelector('.hdr-v').value = ''; }
+    const item = e.target.closest('.hdr-item');
+    const hdrs = item.parentElement;
+    if (hdrs.querySelectorAll('.hdr-item').length > 1) {
+      item.remove();
+    } else {
+      const r = item.querySelector('.hdr-row');
+      r.querySelector('.hdr-k').value = '';
+      r.querySelector('.hdr-v').value = '';
+      const hint = item.querySelector('.hdr-hint');
+      if (hint) hint.style.display = 'none';
+    }
+    SETTINGS_DIRTY = true;
   }
 });
 
@@ -502,9 +662,12 @@ document.addEventListener('click', async (e) => {
 
 // ---------- 页签切换 ----------
 function switchTab(name) {
+  if (name === currentTab) return;
+  if (currentTab === 'settings' && SETTINGS_DIRTY && !confirm('有未保存的设置改动，确定要离开吗？')) return;
+  currentTab = name;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === 'tab-' + name));
-  if (name === 'settings') loadSettings();
+  if (name === 'settings') { loadSettings(); loadGeneral(); }
   if (name === 'usage') refreshUsage();
 }
 document.querySelectorAll('.tab').forEach((t) => {
@@ -512,14 +675,18 @@ document.querySelectorAll('.tab').forEach((t) => {
 });
 
 $('#save-btn').onclick = async () => {
-  const msg = $('#set-msg');
   if (!SETTINGS) return;
+  const keyValue = $('#set-key').value.trim();
+  const server = {
+    host: $('#set-host').value.trim() || '127.0.0.1',
+    port: $('#set-port').value.trim(),
+  };
+  // api-key：有输入 -> 设置；点了「清除」-> 显式清空；都无 -> 不带该字段（保持不变）
+  if (keyValue) server.apiKey = keyValue;
+  else if ($('#set-key').dataset.clear === '1') server.apiKey = '';
+
   const body = {
-    server: {
-      host: $('#set-host').value.trim() || '127.0.0.1',
-      port: $('#set-port').value.trim(),
-      apiKey: $('#set-key').value,
-    },
+    server,
     routing: {
       enabled: $('#route-enabled').checked,
       subagentModel: $('#route-subagent').value,
@@ -542,29 +709,31 @@ $('#save-btn').onclick = async () => {
       headers,
     };
   }
-  msg.textContent = '保存中…';
+  showToast('保存中…');
   const r = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) { msg.textContent = j.error || ('保存失败 ' + r.status); return; }
-  // 自己记住刚设的 key，后续请求直接带上
-  if (body.server.apiKey) localStorage.setItem('cp_key', body.server.apiKey);
-  else localStorage.removeItem('cp_key');
+  if (!r.ok) { showToast(j.error || ('保存失败 ' + r.status), 'err'); return; }
+  // 记住 / 清除本地 api-key，仅在实际变更时才动
+  if (server.apiKey) localStorage.setItem('cp_key', server.apiKey);
+  else if (server.apiKey === '') localStorage.removeItem('cp_key');
   if (j.moved) {
-    msg.textContent = '已保存，正在跳转到新地址 ' + j.moved.url;
+    showToast('已保存，正在跳转到新地址', 'ok');
     setTimeout(() => { location.href = j.moved.url; }, 1400);
   } else {
-    msg.textContent = '已保存并生效 ✓';
-    setTimeout(() => { msg.textContent = ''; }, 2500);
+    showToast('已保存并生效 ✓', 'ok');
     refreshState();
     loadSettings();
   }
 };
 
-$('#reload-btn').onclick = async () => { await api('/api/reload', { method: 'POST' }); await refreshState(); loadSettings(); };
-$('#theme-btn').onclick = () => {
-  const light = document.body.classList.toggle('light');
-  api('/api/theme', { method: 'POST', body: JSON.stringify({ theme: light ? 'light' : 'dark' }) }).catch(() => {});
-};
+$('#reload-btn').onclick = async () => { await api('/api/reload', { method: 'POST' }); await refreshState(); loadSettings(); loadGeneral(); };
+
+// 任何设置表单输入都标记为「有未保存改动」（开机自启/主题开关即时生效，不算）
+document.addEventListener('input', (e) => {
+  const t = e.target;
+  if (t.id === 'autostart' || t.id === 'theme-switch') return;
+  if (t.closest && t.closest('#tab-settings')) SETTINGS_DIRTY = true;
+});
 
 refreshState(); refreshLogs();
 setInterval(refreshState, 4000);

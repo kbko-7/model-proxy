@@ -7,6 +7,7 @@
 
 import http from 'node:http';
 import https from 'node:https';
+import { execFile } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -89,6 +90,35 @@ function relisten() {
     };
     if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
     server.close(doListen);
+  });
+}
+
+// ---------- 开机自启（Windows） ----------
+// 写当前用户 Run 注册表项：登录后自动用 start.vbs（无黑窗）拉起完整桌面壳。
+// 读取/写入都走 reg.exe（child_process），不引入额外依赖；非 Windows 平台返回 unsupported。
+const AUTOSTART_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+const AUTOSTART_NAME = 'model-proxy';
+
+function autostartCommand() {
+  return `wscript.exe "${join(__dirname, 'start.vbs')}"`;
+}
+function autostartState() {
+  if (process.platform !== 'win32') return Promise.resolve({ enabled: false, unsupported: true });
+  return new Promise((resolve) => {
+    execFile('reg', ['query', AUTOSTART_KEY, '/v', AUTOSTART_NAME], { windowsHide: true }, (err, stdout) => {
+      resolve({ enabled: !err && String(stdout).includes(AUTOSTART_NAME), unsupported: false });
+    });
+  });
+}
+function setAutostart(enabled) {
+  if (process.platform !== 'win32') return Promise.resolve({ ok: false, error: '开机自启仅支持 Windows' });
+  const args = enabled
+    ? ['add', AUTOSTART_KEY, '/v', AUTOSTART_NAME, '/t', 'REG_SZ', '/d', autostartCommand(), '/f']
+    : ['delete', AUTOSTART_KEY, '/v', AUTOSTART_NAME, '/f'];
+  return new Promise((resolve) => {
+    execFile('reg', args, { windowsHide: true }, (err, _stdout, stderr) => {
+      resolve(err ? { ok: false, error: String(stderr || err.message).trim() } : { ok: true, enabled: !!enabled });
+    });
   });
 }
 
@@ -562,12 +592,16 @@ const server = http.createServer(async (req, res) => {
         const host = String(b.server?.host || '').trim() || '127.0.0.1';
         const port = parseInt(b.server?.port, 10);
         if (!Number.isInteger(port) || port < 1 || port > 65535) return json(res, 400, { error: '端口必须是 1-65535 之间的整数' });
-        const apiKey = String(b.server?.apiKey || '').trim();
+        // apiKey 只在客户端显式携带该字段时更新：面板用「留空=保持不变」，避免旧客户端误清空
+        const hasApiKey = b.server && Object.prototype.hasOwnProperty.call(b.server, 'apiKey');
+        const apiKey = hasApiKey ? String(b.server.apiKey || '').trim() : undefined;
         const oldHost = config.server?.host || '127.0.0.1';
         const oldPort = config.server?.port || 8787;
         const snapshot = JSON.parse(JSON.stringify(config)); // 失败回滚用
 
-        config.server = { ...(config.server || {}), host, port, apiKey };
+        const serverPatch = { host, port };
+        if (hasApiKey) serverPatch.apiKey = apiKey;
+        config.server = { ...(config.server || {}), ...serverPatch };
         for (const [pid, val] of Object.entries(b.providers || {})) {
           const p = config.providers?.[pid];
           if (!p) continue;
@@ -700,6 +734,14 @@ const server = http.createServer(async (req, res) => {
         state.theme = b.theme === 'light' ? 'light' : 'dark';
         writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
         return json(res, 200, { ok: true, theme: state.theme });
+      }
+      if (path === '/api/autostart' && req.method === 'GET') {
+        return json(res, 200, await autostartState());
+      }
+      if (path === '/api/autostart' && req.method === 'POST') {
+        const b = JSON.parse(await readBody(req));
+        const r = await setAutostart(!!b.enabled);
+        return json(res, r.ok ? 200 : 500, r);
       }
       if (path === '/api/reload' && req.method === 'POST') {
         config = loadConfig();
