@@ -213,6 +213,28 @@ providers:
       assert.ok(r.error.includes('Tavily API key'));
     });
 
+    // 5) 模型请求的结果条数被用户上限封顶
+    await ok('doSearch：模型请求的结果数被上限封顶', async () => {
+      const tavily = await startMock(tavilyHandler);
+      try {
+        const r = await doSearch({ provider: 'tavily', apiKey: 'tvly-test', tavilyUrl: `http://127.0.0.1:${tavily.port}`, maxResults: 1 }, 'hello', 5);
+        assert.strictEqual(r.ok, true);
+        assert.strictEqual(r.results.length, 1, '模型要 5 条但上限 1，只返回 1 条');
+      } finally {
+        tavily.server.close();
+      }
+    });
+    await ok('doSearch：模型请求较少结果数时按请求返回', async () => {
+      const tavily = await startMock(tavilyHandler);
+      try {
+        const r = await doSearch({ provider: 'tavily', apiKey: 'tvly-test', tavilyUrl: `http://127.0.0.1:${tavily.port}`, maxResults: 5 }, 'hello', 1);
+        assert.strictEqual(r.ok, true);
+        assert.strictEqual(r.results.length, 1, '模型要 1 条（未超上限），返回 1 条');
+      } finally {
+        tavily.server.close();
+      }
+    });
+
     // 5) 剥离原生 web_search
     await ok('injectWebSearchTool：剥离原生 web_search 并注入 proxy_web_search', async () => {
       const body = { tools: [{ type: 'web_search_20250305', name: 'web_search' }, { name: 'read_file' }] };

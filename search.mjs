@@ -17,6 +17,7 @@ export const SEARCH_TOOL_DEF = {
     type: 'object',
     properties: {
       query: { type: 'string', description: 'The search query to look up on the web.' },
+      max_results: { type: 'integer', minimum: 1, maximum: 20, description: 'Optional number of results to return (capped by the proxy).' },
     },
     required: ['query'],
   },
@@ -104,16 +105,18 @@ function clampMaxResults(searchCfg) {
 
 // 调搜索后端。返回 { ok, text, results } 或 { ok:false, error }。
 // text 用于填进 tool_result.content；results 为原始数组（面板测试接口展示用）。
-export function doSearch(searchCfg, query) {
+// requestedResults：模型请求的结果条数（可选），被夹在 [1, 用户配置上限] 之间。
+export function doSearch(searchCfg, query, requestedResults) {
   const provider = (searchCfg && searchCfg.provider) || 'searxng';
-  if (provider === 'tavily') return doTavilySearch(searchCfg, query);
-  return doSearxngSearch(searchCfg, query);
+  const ceiling = clampMaxResults(searchCfg);
+  const n = (requestedResults == null) ? ceiling : Math.max(1, Math.min(ceiling, Number(requestedResults) || ceiling));
+  if (provider === 'tavily') return doTavilySearch(searchCfg, query, n);
+  return doSearxngSearch(searchCfg, query, n);
 }
 
 // SearXNG：GET {base}/search?q=…&format=json
-function doSearxngSearch(searchCfg, query) {
+function doSearxngSearch(searchCfg, query, maxResults) {
   const base = String((searchCfg && searchCfg.searxngUrl) || '').replace(/\/+$/, '');
-  const maxResults = clampMaxResults(searchCfg);
   const q = String(query || '').trim();
   if (!base) return Promise.resolve({ ok: false, error: '未配置 SearXNG 地址（searxngUrl）' });
   if (!q) return Promise.resolve({ ok: false, error: '查询词为空' });
@@ -146,10 +149,9 @@ function doSearxngSearch(searchCfg, query) {
 }
 
 // Tavily：POST https://api.tavily.com/search，Bearer 鉴权，返回 results[]（title/url/content）
-function doTavilySearch(searchCfg, query) {
+function doTavilySearch(searchCfg, query, maxResults) {
   const apiKey = String((searchCfg && searchCfg.apiKey) || '').trim();
   const endpoint = String((searchCfg && searchCfg.tavilyUrl) || 'https://api.tavily.com/search').trim();
-  const maxResults = clampMaxResults(searchCfg);
   const q = String(query || '').trim();
   if (!apiKey) return Promise.resolve({ ok: false, error: '未配置 Tavily API key' });
   if (!q) return Promise.resolve({ ok: false, error: '查询词为空' });

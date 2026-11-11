@@ -348,7 +348,8 @@
         <input id="search-url" placeholder="http://127.0.0.1:8080">
       </div>
       <div class="row">
-        <div class="fld" style="flex:1"><label>结果条数（1–20）</label><input id="search-max" type="number" min="1" max="20" style="width:80px"></div>
+        <div class="fld" style="flex:1"><label>结果条数上限（1–20）</label><input id="search-max" type="number" min="1" max="20" style="width:80px"></div>
+        <div class="fld" style="flex:1"><label>最大搜索轮数（1–20）</label><input id="search-rounds" type="number" min="1" max="20" style="width:80px"></div>
       </div>
       <div id="search-result" class="disc-box"></div>
       <div class="foot">开启后仅对 anthropic 前端 + anthropic 后端生效（如 Claude Code → CANNBot）。<br>模型自行决定何时搜索，客户端只看到最终答案。</div>
@@ -663,6 +664,7 @@ async function loadSettings() {
   $('#search-url').value = sc.searxngUrl || '';
   $('#search-key').value = sc.apiKey || '';
   $('#search-max').value = sc.maxResults || 5;
+  $('#search-rounds').value = sc.maxRounds || 8;
   toggleSearchFields();
   const box = $('#set-providers'); box.innerHTML = '';
   for (const [pid, p] of Object.entries(SETTINGS.providers)) {
@@ -966,6 +968,7 @@ $('#save-btn').onclick = async () => {
       searxngUrl: $('#search-url').value.trim(),
       apiKey: $('#search-key').value.trim(),
       maxResults: $('#search-max').value,
+      maxRounds: $('#search-rounds').value,
     },
     providers: {},
   };

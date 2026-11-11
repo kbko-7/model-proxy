@@ -597,7 +597,7 @@ async function forwardWithSearch(target, body, clientReq, clientRes, cls) {
       for (const t of searches) {
         const query = (t.input && t.input.query) || '';
         const t0 = Date.now();
-        const res = await doSearch(searchCfg, query);
+        const res = await doSearch(searchCfg, query, (t.input && t.input.max_results));
         const resultText = res.ok ? res.text : `[搜索失败] ${res.error || '未知错误'}`;
         logToFile({ ts: Date.now(), model, status: res.ok ? 'SEARCH' : 'SEARCH_ERR', ms: Date.now() - t0, cls, rounds, query, ...(res.ok ? {} : { err: res.error }) });
         body.messages.push({ role: 'assistant', content: [{ type: 'tool_use', id: t.id, name: t.name, input: t.input || {} }] });
