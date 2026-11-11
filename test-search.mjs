@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert';
+import { doSearch } from './search.mjs';
 
 let pass = 0, fail = 0;
 function ok(name, fn) {
@@ -34,6 +35,21 @@ function searxngHandler(req, _body, res) {
   res.end(JSON.stringify({ results: [
     { title: 'R1', url: 'http://example.com/1', content: 'first result snippet' },
     { title: 'R2', url: 'http://example.com/2', content: 'second result snippet' },
+  ] }));
+}
+
+// mock Tavily：校验 Bearer 鉴权，返回两条结果
+function tavilyHandler(req, body, res) {
+  if (req.headers.authorization !== 'Bearer tvly-test') {
+    res.writeHead(401, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ detail: { error: 'invalid api key' } }));
+    return;
+  }
+  const q = (() => { try { return JSON.parse(body).query; } catch { return ''; } })();
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ query: q, results: [
+    { title: 'T1', url: 'https://tavily.example/1', content: 'tavily result one', score: 0.9 },
+    { title: 'T2', url: 'https://tavily.example/2', content: 'tavily result two', score: 0.8 },
   ] }));
 }
 
@@ -176,6 +192,25 @@ providers:
       assert.strictEqual(j.ok, true);
       assert.strictEqual(j.results.length, 2);
       assert.strictEqual(j.results[0].title, 'R1');
+    });
+
+    // 4) Tavily 后端（单元级，直测 doSearch）
+    await ok('Tavily：doSearch 走 tavily 后端', async () => {
+      const tavily = await startMock(tavilyHandler);
+      try {
+        const r = await doSearch({ provider: 'tavily', apiKey: 'tvly-test', tavilyUrl: `http://127.0.0.1:${tavily.port}`, maxResults: 2 }, 'hello');
+        assert.strictEqual(r.ok, true);
+        assert.strictEqual(r.results.length, 2);
+        assert.strictEqual(r.results[0].title, 'T1');
+        assert.ok(r.text.includes('T1'));
+      } finally {
+        tavily.server.close();
+      }
+    });
+    await ok('Tavily：未配置 key 返回明确错误', async () => {
+      const r = await doSearch({ provider: 'tavily', apiKey: '', tavilyUrl: 'http://127.0.0.1:1' }, 'hello');
+      assert.strictEqual(r.ok, false);
+      assert.ok(r.error.includes('Tavily API key'));
     });
   } finally {
     proc.kill();

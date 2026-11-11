@@ -17,13 +17,16 @@ server:
   apiKey: ""
   selectedModel: cannbot/deepseek-v4-pro
 
-# 联网搜索（可选）：代理给后端模型注入 proxy_web_search 工具，本地查 SearXNG 后回填。
-# 需要自托管一个 SearXNG 实例（docker run -d -p 8080:8080 searxng/searxng）。
+# 联网搜索（可选）：代理给后端模型注入 proxy_web_search 工具，本地查搜索后端后回填。
+# provider 两种：
+#   searxng — 自托管 SearXNG（docker run -d -p 8080:8080 searxng/searxng），零成本无 key
+#   tavily  — 云端 API（https://tavily.com，有免费额度），填 apiKey 即可，免自托管
 # v1 仅对 anthropic 前端 + anthropic 后端生效（如 Claude Code → CANNBot）。
 search:
   enabled: false
-  provider: searxng
-  searxngUrl: http://127.0.0.1:8080
+  provider: tavily
+  apiKey: ""                          # provider=tavily 时填 tvly-...
+  searxngUrl: http://127.0.0.1:8080   # provider=searxng 时用
   maxResults: 5        # 每条搜索返回的结果数（1–20）
   maxRounds: 8         # 单次请求最多搜索轮数（防死循环）
 

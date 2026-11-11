@@ -214,6 +214,8 @@ function getSearch() {
     enabled: !!s.enabled,
     provider: s.provider || 'searxng',
     searxngUrl: s.searxngUrl || '',
+    tavilyUrl: s.tavilyUrl || 'https://api.tavily.com/search',
+    apiKey: s.apiKey || '',
     maxResults: s.maxResults || 5,
     maxRounds: s.maxRounds || 8,
   };
@@ -780,6 +782,8 @@ const server = http.createServer(async (req, res) => {
             enabled: !!getSearch().enabled,
             provider: getSearch().provider,
             searxngUrl: getSearch().searxngUrl,
+            tavilyUrl: getSearch().tavilyUrl,
+            apiKey: getSearch().apiKey,
             maxResults: getSearch().maxResults,
             maxRounds: getSearch().maxRounds,
           },
@@ -835,10 +839,13 @@ const server = http.createServer(async (req, res) => {
         }
         // 联网搜索设置（写入顶层 search 段）
         if (b.search && typeof b.search === 'object') {
+          const provider = String(b.search.provider || 'searxng').trim() || 'searxng';
           config.search = {
+            ...(config.search || {}),
             enabled: !!b.search.enabled,
-            provider: String(b.search.provider || 'searxng').trim() || 'searxng',
+            provider: (provider === 'tavily' || provider === 'searxng') ? provider : 'searxng',
             searxngUrl: String(b.search.searxngUrl || '').trim(),
+            apiKey: String(b.search.apiKey || '').trim(),
             maxResults: clampInt(b.search.maxResults, 5, 1, 20),
             maxRounds: clampInt(b.search.maxRounds, 8, 1, 20),
           };

@@ -295,14 +295,23 @@
       <div class="switch-row">
         <div>
           <div class="switch-label">启用联网搜索</div>
-          <div class="switch-sub">给后端模型注入 proxy_web_search 工具，由代理本地查 SearXNG 后回填</div>
+          <div class="switch-sub">给后端模型注入 proxy_web_search 工具，由代理本地调搜索后端后回填</div>
         </div>
         <label class="switch">
           <input type="checkbox" id="search-enabled">
           <span class="slider"></span>
         </label>
       </div>
-      <div class="fld"><label>SearXNG 地址（需自托管，如 docker run -d -p 8080:8080 searxng/searxng）</label>
+      <div class="fld"><label>搜索源</label>
+        <select id="search-provider">
+          <option value="tavily">Tavily（云端 API，需 key）</option>
+          <option value="searxng">SearXNG（自托管，无 key）</option>
+        </select>
+      </div>
+      <div class="fld" id="search-key-fld"><label>Tavily API key（tvly-…）</label>
+        <input id="search-key" type="password" placeholder="tvly-...">
+      </div>
+      <div class="fld" id="search-url-fld" style="display:none"><label>SearXNG 地址（需自托管，如 docker run -d -p 8080:8080 searxng/searxng）</label>
         <input id="search-url" placeholder="http://127.0.0.1:8080">
       </div>
       <div class="row">
@@ -583,8 +592,11 @@ async function loadSettings() {
   fillRoutingSelect($('#route-auxiliary'), rt.auxiliaryModel);
   const sc = SETTINGS.search || {};
   $('#search-enabled').checked = !!sc.enabled;
+  $('#search-provider').value = sc.provider === 'searxng' ? 'searxng' : 'tavily';
   $('#search-url').value = sc.searxngUrl || '';
+  $('#search-key').value = sc.apiKey || '';
   $('#search-max').value = sc.maxResults || 5;
+  toggleSearchFields();
   const box = $('#set-providers'); box.innerHTML = '';
   for (const [pid, p] of Object.entries(SETTINGS.providers)) {
     const card = document.createElement('div'); card.className = 'prov'; card.dataset.pid = pid;
@@ -883,8 +895,9 @@ $('#save-btn').onclick = async () => {
     },
     search: {
       enabled: $('#search-enabled').checked,
-      provider: 'searxng',
+      provider: $('#search-provider').value,
       searxngUrl: $('#search-url').value.trim(),
+      apiKey: $('#search-key').value.trim(),
       maxResults: $('#search-max').value,
     },
     providers: {},
@@ -922,6 +935,13 @@ $('#save-btn').onclick = async () => {
 };
 
 $('#reload-btn').onclick = async () => { await api('/api/reload', { method: 'POST' }); await refreshState(); loadSettings(); loadGeneral(); };
+
+function toggleSearchFields() {
+  const provider = $('#search-provider').value;
+  $('#search-key-fld').style.display = provider === 'tavily' ? '' : 'none';
+  $('#search-url-fld').style.display = provider === 'searxng' ? '' : 'none';
+}
+$('#search-provider').addEventListener('change', toggleSearchFields);
 
 $('#search-test').onclick = async () => {
   const btn = $('#search-test');
