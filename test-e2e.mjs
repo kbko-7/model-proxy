@@ -330,14 +330,18 @@ providers:
       assert.deepStrictEqual(j.providers.cannbot.models, ['deepseek-v4-pro']);
     });
 
-    // 12) 主题持久化：写入 state.json 并在 GET / 注入主题类
-    await ok('主题持久化（POST /api/theme -> GET / 注入 light）', async () => {
+    // 12) 主题持久化：默认日间，手动切深色后写入 state.json
+    await ok('主题持久化（默认日间 / 手动切深色）', async () => {
       const before = await get(P, '/');
-      assert.ok(!before.body.includes('<body class="light">'), '默认暗色');
-      const r = await post(P, '/api/theme', { theme: 'light' });
-      assert.strictEqual(r.status, 200);
-      const after = await get(P, '/');
-      assert.ok(after.body.includes('<body class="light">'), '切换后注入 light');
+      assert.ok(before.body.includes('<body class="light">'), '默认日间');
+      const dark = await post(P, '/api/theme', { theme: 'dark' });
+      assert.strictEqual(dark.status, 200);
+      const darkHtml = await get(P, '/');
+      assert.ok(!darkHtml.body.includes('<body class="light">'), '切深色后无 light');
+      const light = await post(P, '/api/theme', { theme: 'light' });
+      assert.strictEqual(light.status, 200);
+      const lightHtml = await get(P, '/');
+      assert.ok(lightHtml.body.includes('<body class="light">'), '切回日间注入 light');
     });
   } finally {
     proc.kill();

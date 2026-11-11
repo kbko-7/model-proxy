@@ -121,7 +121,11 @@
   .hdr-add { border: 1px dashed var(--border); background: transparent; color: var(--muted); border-radius: 8px; padding: 5px 12px; cursor: pointer; font-size: 12.5px; }
   .hdr-add:hover { color: var(--accent); border-color: var(--accent); }
   .prov-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-  .prov-head .prov-title { margin: 0; }
+  .prov-head .prov-title { margin: 0; flex: 1; min-width: 0; }
+.prov-fold { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 8px; width: 26px; height: 26px; cursor: pointer; flex: none; font-size: 12px; line-height: 1; transition: transform .15s; }
+.prov-fold:hover { color: var(--accent); border-color: var(--accent); }
+.prov.collapsed .prov-fold { transform: rotate(-90deg); }
+.prov.collapsed .prov-body { display: none; }
   .prov-del { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 12px; flex: none; }
   .prov-del:hover { color: var(--red); border-color: var(--red); }
   .models-wrap { margin-bottom: 10px; }
@@ -292,8 +296,8 @@
       </div>
       <div class="switch-row" style="margin-bottom:0">
         <div>
-          <div class="switch-label">浅色主题</div>
-          <div class="switch-sub">切换明暗外观</div>
+          <div class="switch-label">深色模式</div>
+          <div class="switch-sub">默认日间，手动切换为夜间</div>
         </div>
         <label class="switch">
           <input type="checkbox" id="theme-switch">
@@ -328,7 +332,7 @@
       <div class="switch-row">
         <div>
           <div class="switch-label">启用联网搜索</div>
-          <div class="switch-sub">给后端模型注入 proxy_web_search 工具，由代理本地调搜索后端后回填</div>
+          <div class="switch-sub">开启后模型可联网搜索实时信息（即时生效）</div>
         </div>
         <label class="switch">
           <input type="checkbox" id="search-enabled">
@@ -668,47 +672,51 @@ async function loadSettings() {
   toggleSearchFields();
   const box = $('#set-providers'); box.innerHTML = '';
   for (const [pid, p] of Object.entries(SETTINGS.providers)) {
-    const card = document.createElement('div'); card.className = 'prov'; card.dataset.pid = pid;
+    const card = document.createElement('div'); card.className = 'prov collapsed'; card.dataset.pid = pid;
     card.innerHTML = `
       <div class="prov-head">
+        <button class="prov-fold" type="button" title="展开 / 折叠">▾</button>
         <div class="prov-title"><span class="prov-id">${escapeHtml(pid)}</span> · ${escapeHtml(p.protocol)}</div>
         <button class="prov-del" type="button" data-pid="${escapeHtml(pid)}" title="删除该 provider">删除</button>
       </div>
-      <div class="fld"><label>显示名</label><input class="prov-name" value="${escapeHtml(p.displayName)}"></div>
-      <div class="row">
-        <div class="fld" style="flex:1"><label>协议</label>
-          <select class="prov-protocol">
-            <option value="anthropic"${p.protocol === 'anthropic' ? ' selected' : ''}>anthropic</option>
-            <option value="openai"${p.protocol === 'openai' ? ' selected' : ''}>openai</option>
-          </select>
-        </div>
-        <div class="fld" style="flex:2"><label>baseURL</label><input class="prov-baseurl" value="${escapeHtml(p.baseURL)}"></div>
-      </div>
-      <div class="hdrs-wrap">
-        <label>鉴权头（headers）</label>
-        <div class="hdrs"></div>
-        <button class="hdr-add" type="button">+ 加 header</button>
-      </div>
-      <div class="models-wrap">
-        <label>模型</label>
-        <div class="models"></div>
-        <button class="hdr-add m-add-btn" type="button" data-pid="${escapeHtml(pid)}">+ 加模型</button>
-        <div class="m-add-form" style="display:none">
-          <div class="row">
-            <input class="m-id" placeholder="模型 id（必填）">
-            <input class="m-name" placeholder="显示名（可省）" style="width:130px">
+      <div class="prov-body">
+        <div class="fld"><label>显示名</label><input class="prov-name" value="${escapeHtml(p.displayName)}"></div>
+        <div class="row">
+          <div class="fld" style="flex:1"><label>协议</label>
+            <select class="prov-protocol">
+              <option value="anthropic"${p.protocol === 'anthropic' ? ' selected' : ''}>anthropic</option>
+              <option value="openai"${p.protocol === 'openai' ? ' selected' : ''}>openai</option>
+            </select>
           </div>
-          <div class="row" style="margin-top:6px">
-            <input class="m-ctx" placeholder="上下文窗口（可省）">
-            <button class="icon-btn m-add-ok" type="button" data-pid="${escapeHtml(pid)}">添加</button>
+          <div class="fld" style="flex:2"><label>baseURL</label><input class="prov-baseurl" value="${escapeHtml(p.baseURL)}"></div>
+        </div>
+        <div class="hdrs-wrap">
+          <label>鉴权头（headers）</label>
+          <div class="hdrs"></div>
+          <button class="hdr-add" type="button">+ 加 header</button>
+        </div>
+        <div class="models-wrap">
+          <label>模型</label>
+          <div class="models"></div>
+          <button class="hdr-add m-add-btn" type="button" data-pid="${escapeHtml(pid)}">+ 加模型</button>
+          <div class="m-add-form" style="display:none">
+            <div class="row">
+              <input class="m-id" placeholder="模型 id（必填）">
+              <input class="m-name" placeholder="显示名（可省）" style="width:130px">
+            </div>
+            <div class="row" style="margin-top:6px">
+              <input class="m-ctx" placeholder="上下文窗口（可省）">
+              <button class="icon-btn m-add-ok" type="button" data-pid="${escapeHtml(pid)}">添加</button>
+            </div>
           </div>
         </div>
+        <div class="fld" style="margin-top:10px">
+          <button class="hdr-add disc-btn" type="button" data-pid="${escapeHtml(pid)}">⟳ 从后端发现模型</button>
+        </div>
+        <div class="disc-box" id="disc-${escapeHtml(pid)}"></div>
       </div>
-      <div class="fld" style="margin-top:10px">
-        <button class="hdr-add disc-btn" type="button" data-pid="${escapeHtml(pid)}">⟳ 从后端发现模型</button>
-      </div>
-      <div class="disc-box" id="disc-${escapeHtml(pid)}"></div>
     `;
+    card.querySelector('.prov-fold').addEventListener('click', () => card.classList.toggle('collapsed'));
     const hdrs = card.querySelector('.hdrs');
     const entries = Object.entries(p.headers || {});
     if (entries.length) for (const [k, v] of entries) hdrs.appendChild(makeHeaderRow(k, v));
@@ -760,14 +768,14 @@ $('#autostart').addEventListener('change', async (e) => {
 
 // 常规卡片：主题 + 开机自启 + 静默启动状态
 function loadGeneral() {
-  $('#theme-switch').checked = document.body.classList.contains('light');
+  $('#theme-switch').checked = !document.body.classList.contains('light'); // 勾选 = 深色
   loadAutostart();
   loadSilentStart();
 }
 $('#theme-switch').addEventListener('change', (e) => {
-  const light = e.target.checked;
-  document.body.classList.toggle('light', light);
-  api('/api/theme', { method: 'POST', body: JSON.stringify({ theme: light ? 'light' : 'dark' }) }).catch(() => {});
+  const dark = e.target.checked;
+  document.body.classList.toggle('light', !dark);
+  api('/api/theme', { method: 'POST', body: JSON.stringify({ theme: dark ? 'dark' : 'light' }) }).catch(() => {});
 });
 async function loadSilentStart() {
   try {
@@ -1012,6 +1020,13 @@ function toggleSearchFields() {
   $('#search-url-fld').style.display = provider === 'searxng' ? '' : 'none';
 }
 $('#search-provider').addEventListener('change', toggleSearchFields);
+$('#search-enabled').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  const r = await api('/api/search/enabled', { method: 'POST', body: JSON.stringify({ enabled: on }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) { e.target.checked = !on; showToast('切换联网搜索失败', 'err'); }
+  else showToast(on ? '已开启联网搜索' : '已关闭联网搜索', 'ok');
+});
 
 $('#search-test').onclick = async () => {
   const btn = $('#search-test');
@@ -1041,7 +1056,7 @@ $('#search-test').onclick = async () => {
 // 任何设置表单输入都标记为「有未保存改动」（常规开关/增删表单即时生效，不算）
 document.addEventListener('input', (e) => {
   const t = e.target;
-  if (t.id === 'autostart' || t.id === 'theme-switch' || t.id === 'silent-start') return;
+  if (t.id === 'autostart' || t.id === 'theme-switch' || t.id === 'silent-start' || t.id === 'search-enabled') return;
   if (t.closest && t.closest('.m-add-form, .prov-add-form')) return;
   if (t.closest && t.closest('#tab-settings')) SETTINGS_DIRTY = true;
 });

@@ -244,6 +244,15 @@ providers:
       assert.ok(names.includes(SEARCH_TOOL_NAME), '注入 proxy_web_search');
       assert.ok(names.includes('read_file'), '其它工具保留');
     });
+
+    // 6) 开关即时切换接口
+    await ok('POST /api/search/enabled 即时切换', async () => {
+      const off = await post(P, '/api/search/enabled', { enabled: false });
+      assert.strictEqual(off.status, 200);
+      assert.strictEqual(JSON.parse(off.body).enabled, false);
+      const on = await post(P, '/api/search/enabled', { enabled: true });
+      assert.strictEqual(JSON.parse(on.body).enabled, true);
+    });
   } finally {
     proc.kill();
     searxng.server.close();

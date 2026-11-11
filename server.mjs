@@ -224,6 +224,12 @@ function getSearch() {
     maxRounds: s.maxRounds || 8,
   };
 }
+// 面板开关即时切换联网搜索（不依赖「保存全部设置」）
+function setSearchEnabled(enabled) {
+  config.search = { ...(config.search || {}), enabled: !!enabled };
+  writeConfig();
+  return { ok: true, enabled: !!enabled };
+}
 function classModel(cls) {
   const r = getRouting();
   if (!r.enabled) return null;
@@ -727,8 +733,8 @@ const server = http.createServer(async (req, res) => {
   try {
     if (path === '/' && req.method === 'GET') {
       let html = readFileSync(PANEL_PATH, 'utf8');
-      // 主题持久化在 state.json，渲染前注入到 <body>，避免首屏闪烁
-      if (state.theme === 'light') html = html.replace('<body>', '<body class="light">');
+      // 主题持久化在 state.json，渲染前注入到 <body>，避免首屏闪烁；默认日间，仅显式选深色才夜间
+      if (state.theme !== 'dark') html = html.replace('<body>', '<body class="light">');
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       return res.end(html);
     }
@@ -1014,6 +1020,13 @@ const server = http.createServer(async (req, res) => {
       if (path === '/api/silentstart' && req.method === 'POST') {
         const b = JSON.parse(await readBody(req));
         return json(res, 200, setSilentStart(!!b.enabled));
+      }
+      if (path === '/api/search/enabled' && req.method === 'GET') {
+        return json(res, 200, { enabled: getSearch().enabled });
+      }
+      if (path === '/api/search/enabled' && req.method === 'POST') {
+        const b = JSON.parse(await readBody(req));
+        return json(res, 200, setSearchEnabled(!!b.enabled));
       }
       if (path === '/api/providers' && req.method === 'POST') {
         const b = JSON.parse(await readBody(req));
