@@ -289,6 +289,30 @@
     </div>
     <div class="card">
       <div class="card-head">
+        <h2>联网搜索</h2>
+        <button class="icon-btn" id="search-test" type="button" title="用当前配置试搜一次">测试搜索</button>
+      </div>
+      <div class="switch-row">
+        <div>
+          <div class="switch-label">启用联网搜索</div>
+          <div class="switch-sub">给后端模型注入 proxy_web_search 工具，由代理本地查 SearXNG 后回填</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="search-enabled">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="fld"><label>SearXNG 地址（需自托管，如 docker run -d -p 8080:8080 searxng/searxng）</label>
+        <input id="search-url" placeholder="http://127.0.0.1:8080">
+      </div>
+      <div class="row">
+        <div class="fld" style="flex:1"><label>结果条数（1–20）</label><input id="search-max" type="number" min="1" max="20" style="width:80px"></div>
+      </div>
+      <div id="search-result" class="disc-box"></div>
+      <div class="foot">开启后仅对 anthropic 前端 + anthropic 后端生效（如 Claude Code → CANNBot）。<br>模型自行决定何时搜索，客户端只看到最终答案。</div>
+    </div>
+    <div class="card">
+      <div class="card-head">
         <h2>服务器与 Providers</h2>
         <button class="icon-btn" id="reload-btn" title="重新加载 config.yaml">↻ 重新加载</button>
       </div>
@@ -317,7 +341,7 @@
     </div>
     <div class="save-bar">
       <button class="primary" id="save-btn">保存全部设置</button>
-      <div class="save-hint">写入 config.yaml · 主机/端口/密钥/路由/全部 provider 一并保存</div>
+      <div class="save-hint">写入 config.yaml · 主机/端口/密钥/路由/搜索/全部 provider 一并保存</div>
     </div>
   </section>
 
@@ -557,6 +581,10 @@ async function loadSettings() {
   $('#route-enabled').checked = !!rt.enabled;
   fillRoutingSelect($('#route-subagent'), rt.subagentModel);
   fillRoutingSelect($('#route-auxiliary'), rt.auxiliaryModel);
+  const sc = SETTINGS.search || {};
+  $('#search-enabled').checked = !!sc.enabled;
+  $('#search-url').value = sc.searxngUrl || '';
+  $('#search-max').value = sc.maxResults || 5;
   const box = $('#set-providers'); box.innerHTML = '';
   for (const [pid, p] of Object.entries(SETTINGS.providers)) {
     const card = document.createElement('div'); card.className = 'prov'; card.dataset.pid = pid;
@@ -853,6 +881,12 @@ $('#save-btn').onclick = async () => {
       subagentModel: $('#route-subagent').value,
       auxiliaryModel: $('#route-auxiliary').value,
     },
+    search: {
+      enabled: $('#search-enabled').checked,
+      provider: 'searxng',
+      searxngUrl: $('#search-url').value.trim(),
+      maxResults: $('#search-max').value,
+    },
     providers: {},
   };
   for (const card of document.querySelectorAll('#set-providers .prov')) {
@@ -888,6 +922,31 @@ $('#save-btn').onclick = async () => {
 };
 
 $('#reload-btn').onclick = async () => { await api('/api/reload', { method: 'POST' }); await refreshState(); loadSettings(); loadGeneral(); };
+
+$('#search-test').onclick = async () => {
+  const btn = $('#search-test');
+  const box = $('#search-result');
+  const query = prompt('输入测试搜索词：', '今天有什么新闻');
+  if (!query) return;
+  btn.disabled = true; btn.textContent = '搜索中…';
+  box.innerHTML = '<div class="foot">搜索中…</div>';
+  try {
+    const r = await api('/api/search/test', { method: 'POST', body: JSON.stringify({ query }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { box.innerHTML = `<div class="foot" style="color:var(--red)">${escapeHtml(j.error || '搜索失败')}</div>`; return; }
+    const results = Array.isArray(j.results) ? j.results : [];
+    if (!results.length) { box.innerHTML = '<div class="foot">无结果</div>'; return; }
+    box.innerHTML = '';
+    for (const r2 of results) {
+      const item = document.createElement('div');
+      item.style.cssText = 'border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:8px;';
+      item.innerHTML = `<div style="font-weight:600">${escapeHtml(r2.title || '(无标题)')}</div><div style="font-size:12px;opacity:.7;word-break:break-all">${escapeHtml(r2.url || '')}</div><div style="font-size:12px;margin-top:4px;opacity:.9">${escapeHtml(r2.content || '')}</div>`;
+      box.appendChild(item);
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = '测试搜索';
+  }
+};
 
 // 任何设置表单输入都标记为「有未保存改动」（常规开关/增删表单即时生效，不算）
 document.addEventListener('input', (e) => {

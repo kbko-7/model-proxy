@@ -13,6 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { buildBackendRequest, buildFrontendResponse, streamToFrontend } from './translate.mjs';
+import { SEARCH_TOOL_NAME, injectWebSearchTool, parseAnthropicToolUses, toolUsesFromMessage, doSearch } from './search.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = process.env.MODEL_PROXY_CONFIG || join(__dirname, 'config.yaml');
@@ -200,6 +201,22 @@ function fullIdFromAlias(alias) {
 // 路由只作用于「落到默认模型」的请求；显式选择的模型（别名或 provider/id）永远优先。
 function getRouting() {
   return config.server?.routing || {};
+}
+
+// ---------- 联网搜索 ----------
+function clampInt(v, d, lo, hi) {
+  const n = parseInt(v, 10);
+  return Number.isInteger(n) ? Math.max(lo, Math.min(hi, n)) : d;
+}
+function getSearch() {
+  const s = config.search || {};
+  return {
+    enabled: !!s.enabled,
+    provider: s.provider || 'searxng',
+    searxngUrl: s.searxngUrl || '',
+    maxResults: s.maxResults || 5,
+    maxRounds: s.maxRounds || 8,
+  };
 }
 function classModel(cls) {
   const r = getRouting();
@@ -450,6 +467,143 @@ function forward(target, frontendProtocol, backendBody, clientReq, clientRes, cl
   upstream.end();
 }
 
+// ---------- 联网搜索：代理侧 tool loop ----------
+// 单次上游调用（全程缓冲，含流式），返回 { status, headers, chunks }。
+function upstreamOnce(target, backendBody, clientReq) {
+  const backendProtocol = providerProtocol(target.provider);
+  const base = (target.provider.baseURL || '').replace(/\/+$/, '');
+  const upstreamPath = backendProtocol === 'openai' ? base + '/chat/completions' : base + '/v1/messages';
+  const u = new URL(upstreamPath);
+  const headers = {
+    'content-type': 'application/json',
+    ...(target.provider.headers || {}),
+  };
+  if (backendProtocol === 'anthropic') {
+    headers['anthropic-version'] = clientReq.headers['anthropic-version'] || ANTHROPIC_VERSION;
+    if (clientReq.headers['anthropic-beta']) headers['anthropic-beta'] = clientReq.headers['anthropic-beta'];
+  }
+  const transport = u.protocol === 'http:' ? http : https;
+  return new Promise((resolve, reject) => {
+    const req = transport.request({
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'http:' ? 80 : 443),
+      path: u.pathname + u.search,
+      method: 'POST',
+      headers,
+    }, (upRes) => {
+      const chunks = [];
+      upRes.on('data', (c) => chunks.push(c));
+      upRes.on('end', () => resolve({ status: upRes.statusCode || 502, headers: upRes.headers, chunks: Buffer.concat(chunks) }));
+      upRes.on('error', reject);
+    });
+    req.on('error', reject);
+    req.write(JSON.stringify(backendBody));
+    req.end();
+  });
+}
+
+// 从缓冲的 Anthropic 响应文本里提取用量（v1 仅 Anthropic 后端）。返回 [inputTokens, outputTokens]。
+function usageFromBufferedAnthropic(text) {
+  let input = 0, output = 0;
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith('{')) {
+    // 非流式 JSON：最后一个 usage 对象
+    const u = extractUsageObject(text) || {};
+    input = u.input_tokens || 0;
+    output = u.output_tokens || 0;
+  } else {
+    // SSE：message_start 的 input_tokens + message_delta 的 output_tokens
+    for (const line of text.split('\n')) {
+      const l = line.trim();
+      if (!l.startsWith('data:')) continue;
+      const obj = safeJson(l.slice(5).trim());
+      if (!obj) continue;
+      if (obj.type === 'message_start') input = obj.message?.usage?.input_tokens ?? input;
+      else if (obj.type === 'message_delta') output = obj.usage?.output_tokens ?? output;
+    }
+  }
+  return [input, output];
+}
+
+// 回放缓冲响应时用：剥离 hop-by-hop / 分帧头，让 Node 自行处理 content-length/chunked，
+// 避免把后端的 transfer-encoding: chunked 原样带到 end(buffer) 上造成协议错乱。
+function safeResponseHeaders(headers) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    const lk = k.toLowerCase();
+    if (lk === 'transfer-encoding' || lk === 'content-length' || lk === 'connection' || lk === 'keep-alive') continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+// 联网搜索循环：注入 proxy_web_search 工具，截获其 tool_use 并本地查 SearXNG 回填，
+// 直到模型给出最终答案（或非搜索工具调用，透传照旧）。v1 限定 anthropic↔anthropic。
+async function forwardWithSearch(target, body, clientReq, clientRes, cls) {
+  const model = `${target.providerId}/${target.modelId}`;
+  const modelId = target.modelId;
+  const clientStream = body.stream === true;
+  const searchCfg = getSearch();
+  const maxRounds = Math.max(1, Math.min(20, Number(searchCfg.maxRounds) || 8));
+  const started = Date.now();
+  body.messages = Array.isArray(body.messages) ? body.messages : [];
+
+  try {
+    for (let round = 0; round < maxRounds; round++) {
+      // 同协议（anthropic→anthropic）：后端请求即 { ...body, model }
+      const backendBody = { ...body, model: modelId };
+      injectWebSearchTool(backendBody, 'anthropic');
+      backendBody.stream = clientStream; // 对齐客户端
+
+      const { status, headers, chunks } = await upstreamOnce(target, backendBody, clientReq);
+      const text = chunks.toString('utf8');
+
+      if (status >= 400) {
+        clientRes.writeHead(status, safeResponseHeaders(headers));
+        clientRes.end(chunks);
+        addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls });
+        return;
+      }
+
+      const [inT, outT] = usageFromBufferedAnthropic(text);
+      recordUsage(model, cls, inT, outT);
+
+      // 检测本轮是否调用了 proxy_web_search
+      let searches;
+      if (clientStream) {
+        const toolUses = await parseAnthropicToolUses(text);
+        searches = toolUses.filter((t) => t.name === SEARCH_TOOL_NAME);
+      } else {
+        searches = toolUsesFromMessage(safeJson(text)).filter((t) => t.name === SEARCH_TOOL_NAME);
+      }
+
+      if (searches.length === 0) {
+        // 最终答案（或非搜索工具调用，原样透传给客户端照旧处理）
+        clientRes.writeHead(status, safeResponseHeaders(headers));
+        clientRes.end(chunks);
+        addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls });
+        return;
+      }
+
+      // 执行搜索并回填 tool_result，进入下一轮
+      for (const t of searches) {
+        const res = await doSearch(searchCfg, (t.input && t.input.query) || '');
+        const resultText = res.ok ? res.text : `[搜索失败] ${res.error || '未知错误'}`;
+        body.messages.push({ role: 'assistant', content: [{ type: 'tool_use', id: t.id, name: t.name, input: t.input || {} }] });
+        body.messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: t.id, content: resultText }] });
+      }
+    }
+    // 超过最大轮数：返回错误，避免死循环
+    addLog({ ts: Date.now(), model, status: 'MAXR', ms: Date.now() - started, cls });
+    clientRes.writeHead(502, { 'content-type': 'application/json' });
+    clientRes.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: '联网搜索超过最大轮数' } }));
+  } catch (e) {
+    addLog({ ts: Date.now(), model, status: 'ERR', ms: Date.now() - started, err: e.message, cls });
+    if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
+    clientRes.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: e.message } }));
+  }
+}
+
 function addLog(entry) {
   logs.unshift(entry);
   if (logs.length > 300) logs.length = 300;
@@ -515,6 +669,11 @@ async function handleCompletion(frontendProtocol, req, res) {
   } catch (e) {
     return json(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: e.message } });
   }
+  // 联网搜索：v1 仅 anthropic 前端 + anthropic 后端（Claude Code → CANNBot 的常见路径）
+  const useSearch = getSearch().enabled
+    && frontendProtocol === 'anthropic'
+    && providerProtocol(target.provider) === 'anthropic';
+  if (useSearch) return forwardWithSearch(target, body, req, res, cls);
   return forward(target, frontendProtocol, backendBody, req, res, cls);
 }
 
@@ -617,6 +776,13 @@ const server = http.createServer(async (req, res) => {
             subagentModel: getRouting().subagentModel || '',
             auxiliaryModel: getRouting().auxiliaryModel || '',
           },
+          search: {
+            enabled: !!getSearch().enabled,
+            provider: getSearch().provider,
+            searxngUrl: getSearch().searxngUrl,
+            maxResults: getSearch().maxResults,
+            maxRounds: getSearch().maxRounds,
+          },
           providers,
         });
       }
@@ -667,6 +833,16 @@ const server = http.createServer(async (req, res) => {
           }
           config.server.routing = r;
         }
+        // 联网搜索设置（写入顶层 search 段）
+        if (b.search && typeof b.search === 'object') {
+          config.search = {
+            enabled: !!b.search.enabled,
+            provider: String(b.search.provider || 'searxng').trim() || 'searxng',
+            searxngUrl: String(b.search.searxngUrl || '').trim(),
+            maxResults: clampInt(b.search.maxResults, 5, 1, 20),
+            maxRounds: clampInt(b.search.maxRounds, 8, 1, 20),
+          };
+        }
         try {
           writeFileSync(CONFIG_PATH, CONFIG_HEADER + stringifyYaml(config), 'utf8');
         } catch (e) {
@@ -705,6 +881,15 @@ const server = http.createServer(async (req, res) => {
           results[m.fullId] = rec;
         }));
         return json(res, 200, { ok: true, results });
+      }
+      if (path === '/api/search/test' && req.method === 'POST') {
+        // 用当前 search 配置试搜一次（验证 SearXNG 是否通）
+        const b = JSON.parse(await readBody(req));
+        const query = String(b.query || '').trim();
+        if (!query) return json(res, 400, { error: '查询词为空' });
+        const t0 = Date.now();
+        const r = await doSearch(getSearch(), query);
+        return json(res, r.ok ? 200 : 502, { ok: r.ok, ms: Date.now() - t0, query, ...(r.ok ? { results: r.results } : { error: r.error }) });
       }
       if (path === '/api/discover' && req.method === 'POST') {
         // 从后端拉取模型列表（只读，不落盘）
