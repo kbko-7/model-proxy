@@ -4,6 +4,7 @@ config.yaml
 # 运行时状态（自动生成）
 state.json
 usage.json
+model-proxy.log
 
 # Python
 .venv/

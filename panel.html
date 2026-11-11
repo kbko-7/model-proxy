@@ -168,6 +168,39 @@
   .toast.ok { border-color: var(--green); }
   .toast.err { border-color: var(--red); }
 
+  /* 弹框（替代原生 prompt） */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(8, 11, 16, 0.55); backdrop-filter: blur(3px);
+    padding: 20px; animation: overlayIn .15s ease;
+  }
+  .modal-overlay[hidden] { display: none; }
+  @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+  .modal {
+    width: 100%; max-width: 380px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px 20px 16px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+    animation: modalIn .18s cubic-bezier(.2, .8, .3, 1);
+  }
+  @keyframes modalIn { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
+  .modal-title { font-size: 15px; font-weight: 650; margin-bottom: 4px; }
+  .modal-sub { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .modal-input {
+    width: 100%; background: var(--card-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 12px; font-size: 13.5px; font-family: inherit; outline: none;
+    margin-bottom: 16px;
+  }
+  .modal-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .modal-actions .btn { border-radius: 10px; padding: 8px 18px; font-size: 13.5px; cursor: pointer; font-weight: 600; }
+  .modal-actions .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .modal-actions .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+  .modal-actions .btn-ok { background: var(--accent); color: #fff; border: 0; }
+  .modal-actions .btn-ok:hover { filter: brightness(1.08); }
+
   .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 10px; }
 
   .tabs { display: flex; gap: 6px; margin-bottom: 14px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 4px; }
@@ -357,11 +390,45 @@
   <div class="foot">模型即点即生效 · token 在「设置」里换 · 子代理分流在「智能路由」</div>
 </div>
 
+<div class="modal-overlay" id="modal" hidden>
+  <div class="modal">
+    <div class="modal-title" id="modal-title"></div>
+    <div class="modal-sub" id="modal-sub"></div>
+    <input class="modal-input" id="modal-input" type="text" autocomplete="off">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="modal-cancel" type="button">取消</button>
+      <button class="btn btn-ok" id="modal-ok" type="button">确定</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = (s) => document.querySelector(s);
 let STATE = null;
 let SETTINGS = null;
 let SETTINGS_DIRTY = false;
+
+// 自定义弹框，替代原生 prompt：resolve 输入值；取消或留空则 resolve(null)。
+function promptModal(title, sub, placeholder, value) {
+  return new Promise((resolve) => {
+    const overlay = $('#modal');
+    $('#modal-title').textContent = title;
+    $('#modal-sub').textContent = sub || '';
+    const input = $('#modal-input');
+    input.placeholder = placeholder || '';
+    input.value = value || '';
+    input.type = 'text';
+    overlay.hidden = false;
+    const close = (v) => { overlay.hidden = true; resolve(v); };
+    $('#modal-ok').onclick = () => close(input.value.trim());
+    $('#modal-cancel').onclick = () => close(null);
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); $('#modal-ok').click(); }
+      else if (e.key === 'Escape') { e.preventDefault(); $('#modal-cancel').click(); }
+    };
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+  });
+}
 let currentTab = 'models';
 
 let toastTimer = null;
@@ -382,7 +449,7 @@ async function api(path, opts = {}) {
   if (key) headers['x-api-key'] = key;
   let r = await fetch(path, Object.assign({}, opts, { headers }));
   if (r.status === 401) {
-    const k = prompt('这个代理设置了对外 api-key，请输入：');
+    const k = await promptModal('需要鉴权', '这个代理设置了对外 api-key，请输入');
     if (k) { localStorage.setItem('cp_key', k); return api(path, opts); }
   }
   return r;
@@ -946,7 +1013,7 @@ $('#search-provider').addEventListener('change', toggleSearchFields);
 $('#search-test').onclick = async () => {
   const btn = $('#search-test');
   const box = $('#search-result');
-  const query = prompt('输入测试搜索词：', '今天有什么新闻');
+  const query = await promptModal('测试搜索', '输入一个关键词，验证搜索后端是否可用', '输入关键词…', '今天有什么新闻');
   if (!query) return;
   btn.disabled = true; btn.textContent = '搜索中…';
   box.innerHTML = '<div class="foot">搜索中…</div>';

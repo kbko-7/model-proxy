@@ -8,17 +8,19 @@
 import http from 'node:http';
 import https from 'node:https';
 import { execFile } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, appendFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { buildBackendRequest, buildFrontendResponse, streamToFrontend } from './translate.mjs';
-import { SEARCH_TOOL_NAME, injectWebSearchTool, parseAnthropicToolUses, toolUsesFromMessage, doSearch } from './search.mjs';
+import { SEARCH_TOOL_NAMES, injectWebSearchTool, parseAnthropicToolUses, toolUsesFromMessage, doSearch } from './search.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = process.env.MODEL_PROXY_CONFIG || join(__dirname, 'config.yaml');
 const STATE_PATH = process.env.MODEL_PROXY_STATE || join(__dirname, 'state.json');
 const PANEL_PATH = join(__dirname, 'panel.html');
+// 落盘日志（排查用）：追加写，重启不丢。可用 MODEL_PROXY_LOG 环境变量覆盖路径。
+const LOG_PATH = process.env.MODEL_PROXY_LOG || join(__dirname, 'model-proxy.log');
 const ANTHROPIC_VERSION = '2023-06-01';
 // 发现接口别名前缀：Claude Code 只保留 id 里含 "claude"/"anthropic" 的模型，
 // 所以给你的模型统一加这个前缀绕过过滤；display_name 才是界面上看到的漂亮名字。
@@ -548,10 +550,12 @@ async function forwardWithSearch(target, body, clientReq, clientRes, cls) {
   const searchCfg = getSearch();
   const maxRounds = Math.max(1, Math.min(20, Number(searchCfg.maxRounds) || 8));
   const started = Date.now();
+  let rounds = 0;
   body.messages = Array.isArray(body.messages) ? body.messages : [];
 
   try {
     for (let round = 0; round < maxRounds; round++) {
+      rounds = round + 1;
       // 同协议（anthropic→anthropic）：后端请求即 { ...body, model }
       const backendBody = { ...body, model: modelId };
       injectWebSearchTool(backendBody, 'anthropic');
@@ -563,52 +567,71 @@ async function forwardWithSearch(target, body, clientReq, clientRes, cls) {
       if (status >= 400) {
         clientRes.writeHead(status, safeResponseHeaders(headers));
         clientRes.end(chunks);
-        addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls });
+        addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls, rounds });
         return;
       }
 
       const [inT, outT] = usageFromBufferedAnthropic(text);
       recordUsage(model, cls, inT, outT);
 
-      // 检测本轮是否调用了 proxy_web_search
+      // 检测本轮是否调用了搜索工具（proxy_web_search 或原生 web_search）
       let searches;
       if (clientStream) {
         const toolUses = await parseAnthropicToolUses(text);
-        searches = toolUses.filter((t) => t.name === SEARCH_TOOL_NAME);
+        searches = toolUses.filter((t) => SEARCH_TOOL_NAMES.includes(t.name));
       } else {
-        searches = toolUsesFromMessage(safeJson(text)).filter((t) => t.name === SEARCH_TOOL_NAME);
+        searches = toolUsesFromMessage(safeJson(text)).filter((t) => SEARCH_TOOL_NAMES.includes(t.name));
       }
 
       if (searches.length === 0) {
         // 最终答案（或非搜索工具调用，原样透传给客户端照旧处理）
         clientRes.writeHead(status, safeResponseHeaders(headers));
         clientRes.end(chunks);
-        addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls });
+        addLog({ ts: Date.now(), model, status, ms: Date.now() - started, cls, rounds });
         return;
       }
 
       // 执行搜索并回填 tool_result，进入下一轮
       for (const t of searches) {
-        const res = await doSearch(searchCfg, (t.input && t.input.query) || '');
+        const query = (t.input && t.input.query) || '';
+        const t0 = Date.now();
+        const res = await doSearch(searchCfg, query);
         const resultText = res.ok ? res.text : `[搜索失败] ${res.error || '未知错误'}`;
+        logToFile({ ts: Date.now(), model, status: res.ok ? 'SEARCH' : 'SEARCH_ERR', ms: Date.now() - t0, cls, rounds, query, ...(res.ok ? {} : { err: res.error }) });
         body.messages.push({ role: 'assistant', content: [{ type: 'tool_use', id: t.id, name: t.name, input: t.input || {} }] });
         body.messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: t.id, content: resultText }] });
       }
     }
     // 超过最大轮数：返回错误，避免死循环
-    addLog({ ts: Date.now(), model, status: 'MAXR', ms: Date.now() - started, cls });
+    addLog({ ts: Date.now(), model, status: 'MAXR', ms: Date.now() - started, cls, rounds });
     clientRes.writeHead(502, { 'content-type': 'application/json' });
     clientRes.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: '联网搜索超过最大轮数' } }));
   } catch (e) {
-    addLog({ ts: Date.now(), model, status: 'ERR', ms: Date.now() - started, err: e.message, cls });
+    addLog({ ts: Date.now(), model, status: 'ERR', ms: Date.now() - started, err: e.message, cls, rounds });
     if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
     clientRes.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: e.message } }));
   }
 }
 
+function fmtLogLine(e) {
+  const parts = [new Date(e.ts).toISOString()];
+  parts.push('status=' + e.status);
+  if (e.ms != null) parts.push(e.ms + 'ms');
+  if (e.model) parts.push('model=' + e.model);
+  if (e.cls) parts.push('cls=' + e.cls);
+  if (e.rounds != null) parts.push('rounds=' + e.rounds);
+  if (e.query) parts.push('query=' + JSON.stringify(e.query));
+  if (e.err) parts.push('err=' + JSON.stringify(e.err));
+  return parts.join(' ');
+}
+// 落盘日志：追加写，失败静默（不影响主流程）
+function logToFile(e) {
+  try { appendFileSync(LOG_PATH, fmtLogLine(e) + '\n', 'utf8'); } catch { /* ignore */ }
+}
 function addLog(entry) {
   logs.unshift(entry);
   if (logs.length > 300) logs.length = 300;
+  logToFile(entry);
 }
 
 // ---------- 请求读取 ----------

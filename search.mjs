@@ -22,16 +22,24 @@ export const SEARCH_TOOL_DEF = {
   },
 };
 
-// 把 proxy_web_search 工具追加进后端请求的 tools 数组（按后端协议格式）。已存在则不动，避免重复注入。
+// 代理要拦截的搜索工具名：proxy_web_search（代理注入）+ web_search（Claude Code 原生，后端不支持，需兜底）
+export const SEARCH_TOOL_NAMES = [SEARCH_TOOL_NAME, 'web_search'];
+
+// 把 proxy_web_search 工具追加进后端请求的 tools 数组（按后端协议格式），同时剥离 Claude Code 自带的
+// 原生 web_search（CANNBot 后端不支持，会失败），统一走代理侧搜索。已存在则不动，避免重复注入。
 export function injectWebSearchTool(backendBody, backendProtocol) {
   const src = Array.isArray(backendBody.tools) ? backendBody.tools : [];
-  const already = src.some((t) => t && (t.name === SEARCH_TOOL_NAME || (t.function && t.function.name === SEARCH_TOOL_NAME)));
-  if (already) return backendBody;
-  const tools = src.slice();
-  if (backendProtocol === 'anthropic') {
-    tools.push(SEARCH_TOOL_DEF);
-  } else {
-    tools.push({ type: 'function', function: { name: SEARCH_TOOL_DEF.name, description: SEARCH_TOOL_DEF.description, parameters: SEARCH_TOOL_DEF.input_schema } });
+  const tools = src.filter((t) => {
+    const name = t && (t.name || (t.function && t.function.name));
+    return name !== 'web_search';
+  });
+  const already = tools.some((t) => t && (t.name === SEARCH_TOOL_NAME || (t.function && t.function.name === SEARCH_TOOL_NAME)));
+  if (!already) {
+    if (backendProtocol === 'anthropic') {
+      tools.push(SEARCH_TOOL_DEF);
+    } else {
+      tools.push({ type: 'function', function: { name: SEARCH_TOOL_DEF.name, description: SEARCH_TOOL_DEF.description, parameters: SEARCH_TOOL_DEF.input_schema } });
+    }
   }
   backendBody.tools = tools;
   return backendBody;

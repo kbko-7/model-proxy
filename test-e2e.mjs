@@ -151,7 +151,7 @@ providers:
 
   const proc = spawn(process.execPath, ['server.mjs'], {
     cwd: dirname(fileURLToPath(import.meta.url)),
-    env: { ...process.env, MODEL_PROXY_CONFIG: configPath, MODEL_PROXY_STATE: statePath, MODEL_PROXY_USAGE: join(dir, 'usage.json') },
+    env: { ...process.env, MODEL_PROXY_CONFIG: configPath, MODEL_PROXY_STATE: statePath, MODEL_PROXY_USAGE: join(dir, 'usage.json'), MODEL_PROXY_LOG: join(dir, 'log.txt') },
     stdio: ['pipe', 'ignore', 'inherit'],
   });
   proc.stdin.end();

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert';
-import { doSearch } from './search.mjs';
+import { doSearch, injectWebSearchTool, SEARCH_TOOL_NAME } from './search.mjs';
 
 let pass = 0, fail = 0;
 function ok(name, fn) {
@@ -145,7 +145,7 @@ providers:
 
   const proc = spawn(process.execPath, ['server.mjs'], {
     cwd: dirname(fileURLToPath(import.meta.url)),
-    env: { ...process.env, MODEL_PROXY_CONFIG: configPath, MODEL_PROXY_STATE: statePath, MODEL_PROXY_USAGE: join(dir, 'usage.json') },
+    env: { ...process.env, MODEL_PROXY_CONFIG: configPath, MODEL_PROXY_STATE: statePath, MODEL_PROXY_USAGE: join(dir, 'usage.json'), MODEL_PROXY_LOG: join(dir, 'log.txt') },
     stdio: ['pipe', 'ignore', 'inherit'],
   });
   proc.stdin.end();
@@ -211,6 +211,16 @@ providers:
       const r = await doSearch({ provider: 'tavily', apiKey: '', tavilyUrl: 'http://127.0.0.1:1' }, 'hello');
       assert.strictEqual(r.ok, false);
       assert.ok(r.error.includes('Tavily API key'));
+    });
+
+    // 5) 剥离原生 web_search
+    await ok('injectWebSearchTool：剥离原生 web_search 并注入 proxy_web_search', async () => {
+      const body = { tools: [{ type: 'web_search_20250305', name: 'web_search' }, { name: 'read_file' }] };
+      injectWebSearchTool(body, 'anthropic');
+      const names = body.tools.map((t) => t.name);
+      assert.ok(!names.includes('web_search'), '原生 web_search 被剥离');
+      assert.ok(names.includes(SEARCH_TOOL_NAME), '注入 proxy_web_search');
+      assert.ok(names.includes('read_file'), '其它工具保留');
     });
   } finally {
     proc.kill();
