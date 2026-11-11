@@ -21,6 +21,8 @@ const STATE_PATH = process.env.MODEL_PROXY_STATE || join(__dirname, 'state.json'
 const PANEL_PATH = join(__dirname, 'panel.html');
 // 落盘日志（排查用）：追加写，重启不丢。可用 MODEL_PROXY_LOG 环境变量覆盖路径。
 const LOG_PATH = process.env.MODEL_PROXY_LOG || join(__dirname, 'model-proxy.log');
+// 日志只保留最近 24 小时（每行开头是 ISO 时间戳，据此裁剪）
+const LOG_RETENTION_MS = 24 * 60 * 60 * 1000;
 const ANTHROPIC_VERSION = '2023-06-01';
 // 发现接口别名前缀：Claude Code 只保留 id 里含 "claude"/"anthropic" 的模型，
 // 所以给你的模型统一加这个前缀绕过过滤；display_name 才是界面上看到的漂亮名字。
@@ -633,6 +635,21 @@ function addLog(entry) {
   if (logs.length > 300) logs.length = 300;
   logToFile(entry);
 }
+// 只保留最近 24 小时的日志行（每行开头是 ISO 时间戳），启动时 + 每 6 小时清理一次
+function pruneLog() {
+  try {
+    if (!existsSync(LOG_PATH)) return;
+    const text = readFileSync(LOG_PATH, 'utf8');
+    const cutoff = Date.now() - LOG_RETENTION_MS;
+    const kept = text.split('\n').filter((line) => {
+      const ts = Date.parse(line.slice(0, 24));
+      return Number.isFinite(ts) && ts >= cutoff;
+    });
+    writeFileSync(LOG_PATH, kept.length ? kept.join('\n') + '\n' : '', 'utf8');
+  } catch { /* ignore */ }
+}
+pruneLog();
+setInterval(pruneLog, 6 * 60 * 60 * 1000).unref?.();
 
 // ---------- 请求读取 ----------
 function readBody(req) {
